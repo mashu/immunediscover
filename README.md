@@ -69,30 +69,52 @@ the false-positive rate exceeds N percent.
 ```
 
 runs discovery with `-v`, so that the unfiltered clusters are kept, and then
-asks whether statistics other than read counts separate the KI targets from
-everything else (`evidence-{V,D,J}.txt` in the output directory). With
-`--skip-discover` the `KI-blast-*.unfiltered.tsv.gz` tables must already
-exist. The report is aggregate only: no donor identifiers and no
-sequences; `--evidence-list 0` also drops the list of gene and allele names.
+asks whether the evidence separates the KI targets from everything else
+(`evidence-{V,D,J}.txt` in the output directory). With `--skip-discover` the
+`KI-blast-*.unfiltered.tsv.gz` tables must already exist. The report is
+aggregate only: no donor identifiers and no sequences; `--evidence-list 0`
+also drops the lists of gene and allele names.
 
-The statistics come from `src/evidence/` and are computed per sequence and
+The evidence comes from `src/evidence/` and is computed per sequence and
 donor; the rest of the plate is only used to learn rates:
 
-| Statistic | Meaning |
+| Quantity | Meaning |
 |---|---|
 | dosage | estimated copies. Genomic DNA carries every gene in the same number of copies, so reads of a gene in a donor = DNA amount x primer efficiency x copies; both factors are fitted over the plate. About 1 for a heterozygous allele, 2 for a homozygous one, far below 1 for artifacts |
-| log10 p(copy) | probability of seeing so few reads from one real copy |
-| -log10 E | how unexpected the reads are as an artifact of the nearest more abundant sequence of the gene in the donor: sporadic errors (rate learned from the plate) or a recurrent artifact (its usual ratio to that sequence in the other donors) |
-| carriers, tracking | donors holding a copy-like amount; share of the parent's carriers in which the sequence is seen at all (close to 1 for a recurrent artifact) |
-| chimera | starts like one more abundant sequence of the donor and ends like another |
-| score | provisional sum of the above, in log10 units |
+| kind | what the sequence could be an artifact of: 1, 2, 3 or more differences from a more abundant sequence of the gene in the donor, a chimera of two of them, or nothing (it is the top sequence of its gene) |
+| evidence | -log10 of the share of artifacts expected among the sequences of the same kind holding at least this dosage: 1 = one in ten, 2 = one in a hundred. 0 below a copy-like amount |
+| does not segregate | in a copy-like amount in at least 90% of the donors, or at the same ratio to its parent in 90% of the other donors. Such a sequence is not a sporadic artifact, and not shown to be an allele of this gene either: another locus, or a systematic artifact |
+| carriers, private | donors holding a copy-like amount; private = no other donor does |
+
+How the evidence is obtained (`src/evidence/artifact_rate.rs`):
+
+1. One copy varies around a dosage of 1 by the allele-level spread measured
+   on the database alleles of the plate. Below the lowest 1% of single
+   copies (the *edge*, about 0.6 to 0.7) a sequence is not a copy.
+2. Artifacts of a kind are counted in three windows of half a decade of
+   dosage below the edge, among sequences private to one donor and absent
+   from most others. Their decline from window to window is extrapolated
+   beyond the edge as a power-law tail; of the decline over the last window
+   and the average over the last two, the slower is used.
+3. The number of artifacts expected with at least a dosage, divided by the
+   number of candidates seen with at least that dosage, is the expected
+   share of artifacts among them (a false discovery rate). A sequence
+   private to its donor is compared with the private candidates only; one
+   that other donors carry is compared with all candidates.
+
+Results stay per donor. The truth, however, is known per sequence, so the
+report judges every sequence on the donor where its evidence is strongest
+and compares the KI-cohort targets with the other non-database sequences.
 
 What to read in the report: the amplification section says whether the
 "equal copies" premise holds (small residual spread, database alleles near
-1 and 2 copies); the error section compares observed and expected numbers
-of error variants; the separation table, in its row for sequences passing
-the current `-c`/`-f`, is the hard case. The score is not calibrated and is
-not used by `discover blast`.
+1 and 2 copies); the evidence section shows, per kind, the artifacts
+counted, the expected number beyond the edge and the candidates found; the
+gene list names genes whose database alleles sit below a copy (more than
+two copies of the gene, where one copy is less than half of it); the rules
+table compares `-c`/`-f` with cuts on the evidence, per sequence; the last
+two lists name what the evidence would add and what it would lose. The
+evidence is not used by `discover blast`.
 
 ## Commands
 

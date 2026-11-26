@@ -98,7 +98,11 @@ impl Amplification {
 
     pub fn set_dosage(&self, observations: &mut [Observation]) {
         for o in observations.iter_mut() {
-            o.evidence.dosage = self.per_copy_reads(o).map(|reads| o.count as f64 / reads);
+            o.evidence.per_copy_reads = self.per_copy_reads(o);
+            o.evidence.dosage = o
+                .evidence
+                .per_copy_reads
+                .map(|reads| o.count as f64 / reads);
         }
     }
 

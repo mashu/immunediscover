@@ -90,13 +90,30 @@ pub fn from_clusters(clusters: &Frame) -> Result<(Vec<Observation>, usize)> {
         o.db_distance = o.db_distance.min(distance);
         *reads_by_hit[i].entry(hits[row].as_str()).or_insert(0) += full;
     }
-    for (o, by_hit) in observations.iter_mut().zip(&reads_by_hit) {
-        let (nearest, _) = by_hit
-            .iter()
-            .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))
-            .expect("every observation has at least one cluster");
-        o.nearest = nearest.to_string();
-        o.gene = gene_of(nearest).to_string();
+    // A sequence belongs to one allele, and so to one gene, on the whole
+    // plate: the one most of its reads were assigned to. Assigned donor by
+    // donor, a sequence two genes share would move between them and put
+    // its reads into a different gene's total in every donor.
+    let mut reads_on_plate: HashMap<&str, HashMap<&str, u64>> = HashMap::new();
+    for (o, by_hit) in observations.iter().zip(&reads_by_hit) {
+        let of_sequence = reads_on_plate.entry(o.sequence.as_str()).or_default();
+        for (hit, reads) in by_hit {
+            *of_sequence.entry(hit).or_insert(0) += reads;
+        }
+    }
+    let nearest: Vec<String> = observations
+        .iter()
+        .map(|o| {
+            let (hit, _) = reads_on_plate[o.sequence.as_str()]
+                .iter()
+                .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))
+                .expect("every observation has at least one cluster");
+            hit.to_string()
+        })
+        .collect();
+    for (o, nearest) in observations.iter_mut().zip(nearest) {
+        o.gene = gene_of(&nearest).to_string();
+        o.nearest = nearest;
     }
     Ok((observations, donors.len()))
 }
@@ -134,5 +151,26 @@ mod tests {
         assert_eq!(first.gene, "A");
         assert!(first.is_database_allele());
         assert_eq!(observations[1].count, 4);
+    }
+
+    #[test]
+    fn a_sequence_keeps_one_gene_on_the_whole_plate() {
+        // Donor 2 has the sequence under gene B, donors 1 and 3 under gene
+        // A, with more reads altogether.
+        let clusters = Frame::from_columns([
+            ("well", Column::from_ints([1, 2, 3])),
+            ("case", Column::from_strings(["D1", "D2", "D3"])),
+            ("sseqid", Column::from_strings(["A*01", "B*01", "A*01"])),
+            ("full_count", Column::from_ints([6, 8, 5])),
+            ("full_ratio", Column::from_floats([1.0, 1.0, 1.0])),
+            ("ratio", Column::from_floats([1.0, 1.0, 1.0])),
+            ("aln_qseq", Column::from_strings(["ACGT", "ACGT", "ACGT"])),
+            ("aln_mismatch", Column::from_ints([1, 1, 1])),
+        ])
+        .unwrap();
+        let (observations, _) = from_clusters(&clusters).unwrap();
+        assert!(observations
+            .iter()
+            .all(|o| o.gene == "A" && o.nearest == "A*01"));
     }
 }

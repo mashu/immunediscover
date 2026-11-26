@@ -257,7 +257,7 @@ mod tests {
         candidate.db_distance = 1;
         observations.push(candidate);
         parents::assign(&mut observations);
-        plate::set_context(&mut observations);
+        plate::set_context(&mut observations, 20);
         let sporadic = fit_sporadic(&observations);
         let recurrent = fit_recurrent(&observations);
         set_expectation(&mut observations, &sporadic, &recurrent);

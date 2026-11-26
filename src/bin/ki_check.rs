@@ -21,9 +21,12 @@ use std::process::ExitCode;
 use clap::Parser;
 
 use immunediscover::check::allele_recovery::{
-    analyze_blast_results, format_report, split_fasta_by_s_suffix, GeneKind, RecoveryReport,
+    analyze_blast_results, format_report, load_target_alleles, split_fasta_by_s_suffix, GeneKind,
+    RecoveryReport,
 };
-use immunediscover::check::evidence_report::{classify, format_evidence_report, Thresholds};
+use immunediscover::check::evidence_report::{
+    classify, format_evidence_report, Plate, Thresholds, Truth,
+};
 use immunediscover::cli::presets::{resolve, Preset, PresetValues, Resolved};
 use immunediscover::commands::discover::blast::flank_split::unfiltered_sidecar;
 use immunediscover::commands::discover::blast::{self, BlastParams};
@@ -68,15 +71,16 @@ struct Args {
     #[arg(long = "work-dir", default_value = "blast")]
     work_dir: String,
 
-    /// Also evaluate the evidence statistics (dosage, artifact expectation,
-    /// provisional score) against the KI targets. Needs the unfiltered
+    /// Also evaluate the evidence (dosage against the database alleles of
+    /// the plate) per sequence against the KI targets. Needs the unfiltered
     /// cluster table, which discovery writes when this flag is set; with
     /// --skip-discover it must already exist. The report is aggregate only.
     #[arg(long = "evidence")]
     evidence: bool,
 
-    /// Top unexplained candidates listed in the evidence report (gene and
-    /// nearest allele names only; 0 leaves the list out)
+    /// Sequences listed in the evidence report: the non-target sequences
+    /// with the strongest evidence and the targets with the weakest (gene
+    /// and nearest allele names only; 0 leaves the lists out)
     #[arg(long = "evidence-list", default_value_t = 20)]
     evidence_list: usize,
 }
@@ -150,7 +154,7 @@ fn run() -> Result<bool> {
         reports.push(report);
 
         if args.evidence {
-            let text = evidence_report(&paths, &args)?;
+            let text = evidence_report(&paths, &alleles_tsv, &args)?;
             print!("{text}");
             let path = out_dir.join(format!("evidence-{}.txt", kind.as_str()));
             std::fs::write(&path, &text).map_err(|e| Error::io(&path, e))?;
@@ -196,9 +200,9 @@ fn run() -> Result<bool> {
     Ok(ok)
 }
 
-/// Evaluate the evidence statistics on the unfiltered clusters of a gene
-/// segment against its database and target FASTAs.
-fn evidence_report(paths: &GenePaths, args: &Args) -> Result<String> {
+/// Evaluate the evidence on the unfiltered clusters of a gene segment
+/// against its database and the held-out alleles of the cohort.
+fn evidence_report(paths: &GenePaths, alleles_tsv: &Path, args: &Args) -> Result<String> {
     let clusters = unfiltered_sidecar(&paths.blast_out);
     if !clusters.is_file() {
         return Err(Error::invalid(format!(
@@ -208,23 +212,24 @@ fn evidence_report(paths: &GenePaths, args: &Args) -> Result<String> {
     }
     let (mut observations, n_donors) = evidence::read_clusters(&clusters)?;
     let models = evidence::assess(&mut observations, n_donors);
-    let classes = classify(&observations, &paths.origin_fasta, &paths.target_fasta)?;
+    let (cohort_targets, _) = load_target_alleles(&paths.target_fasta, alleles_tsv, paths.kind)?;
+    let truth = Truth::read(&paths.origin_fasta, &paths.target_fasta, &cohort_targets)?;
+    let classes = classify(&observations, &truth);
     let resolved = ki_resolved(paths.kind);
-    let thresholds = Thresholds {
-        min_count: resolved.min_full_count.max(0) as u64,
-        min_ratio: resolved.min_full_ratio,
+    let plate = Plate {
+        observations: &observations,
+        classes: &classes,
+        n_donors,
+        models: &models,
+        thresholds: Thresholds {
+            min_count: resolved.min_full_count.max(0) as u64,
+            min_ratio: resolved.min_full_ratio,
+        },
     };
     Ok(format!(
         "\n======== Evidence, {} ========\n{}",
         paths.kind.as_str(),
-        format_evidence_report(
-            &observations,
-            &classes,
-            n_donors,
-            &models,
-            thresholds,
-            args.evidence_list
-        )
+        format_evidence_report(&plate, args.evidence_list)
     ))
 }
 
