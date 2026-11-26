@@ -12,6 +12,7 @@ pub mod check;
 pub mod cli;
 pub mod commands;
 pub mod error;
+pub mod evidence;
 pub mod filters;
 pub mod frame;
 pub mod io;

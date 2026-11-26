@@ -8,6 +8,7 @@
 //! positives).
 
 pub mod allele_recovery;
+pub mod evidence_report;
 
 pub use allele_recovery::{
     analyze_blast_results, format_report, load_ki_target_alleles, load_target_alleles,

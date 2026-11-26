@@ -62,6 +62,38 @@ Defaults write under `{check-root}/analysis_results_rs/`. Exit status is
 non-zero if any target is missed; pass `--max-fp-rate N` to also fail when
 the false-positive rate exceeds N percent.
 
+### Evidence statistics (`--evidence`)
+
+```
+./target/release/ki-check --check-root /path/to/ImmuneDiscover-IGH-2026-Check --evidence
+```
+
+runs discovery with `-v`, so that the unfiltered clusters are kept, and then
+asks whether statistics other than read counts separate the KI targets from
+everything else (`evidence-{V,D,J}.txt` in the output directory). With
+`--skip-discover` the `KI-blast-*.unfiltered.tsv.gz` tables must already
+exist. The report is aggregate only: no donor identifiers and no
+sequences; `--evidence-list 0` also drops the list of gene and allele names.
+
+The statistics come from `src/evidence/` and are computed per sequence and
+donor; the rest of the plate is only used to learn rates:
+
+| Statistic | Meaning |
+|---|---|
+| dosage | estimated copies. Genomic DNA carries every gene in the same number of copies, so reads of a gene in a donor = DNA amount x primer efficiency x copies; both factors are fitted over the plate. About 1 for a heterozygous allele, 2 for a homozygous one, far below 1 for artifacts |
+| log10 p(copy) | probability of seeing so few reads from one real copy |
+| -log10 E | how unexpected the reads are as an artifact of the nearest more abundant sequence of the gene in the donor: sporadic errors (rate learned from the plate) or a recurrent artifact (its usual ratio to that sequence in the other donors) |
+| carriers, tracking | donors holding a copy-like amount; share of the parent's carriers in which the sequence is seen at all (close to 1 for a recurrent artifact) |
+| chimera | starts like one more abundant sequence of the donor and ends like another |
+| score | provisional sum of the above, in log10 units |
+
+What to read in the report: the amplification section says whether the
+"equal copies" premise holds (small residual spread, database alleles near
+1 and 2 copies); the error section compares observed and expected numbers
+of error variants; the separation table, in its row for sequences passing
+the current `-c`/`-f`, is the hard case. The score is not calibrated and is
+not used by `discover blast`.
+
 ## Commands
 
 Same tree, option names and defaults as upstream (`--help` at every level):

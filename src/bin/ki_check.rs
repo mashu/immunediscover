@@ -23,9 +23,12 @@ use clap::Parser;
 use immunediscover::check::allele_recovery::{
     analyze_blast_results, format_report, split_fasta_by_s_suffix, GeneKind, RecoveryReport,
 };
+use immunediscover::check::evidence_report::{classify, format_evidence_report, Thresholds};
 use immunediscover::cli::presets::{resolve, Preset, PresetValues, Resolved};
+use immunediscover::commands::discover::blast::flank_split::unfiltered_sidecar;
 use immunediscover::commands::discover::blast::{self, BlastParams};
 use immunediscover::error::{Error, Result};
+use immunediscover::evidence;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -64,6 +67,18 @@ struct Args {
     /// Work directory for discover blast intermediates
     #[arg(long = "work-dir", default_value = "blast")]
     work_dir: String,
+
+    /// Also evaluate the evidence statistics (dosage, artifact expectation,
+    /// provisional score) against the KI targets. Needs the unfiltered
+    /// cluster table, which discovery writes when this flag is set; with
+    /// --skip-discover it must already exist. The report is aggregate only.
+    #[arg(long = "evidence")]
+    evidence: bool,
+
+    /// Top unexplained candidates listed in the evidence report (gene and
+    /// nearest allele names only; 0 leaves the list out)
+    #[arg(long = "evidence-list", default_value_t = 20)]
+    evidence_list: usize,
 }
 
 struct GenePaths {
@@ -95,10 +110,7 @@ fn run() -> Result<bool> {
     let root = args.check_root.canonicalize().map_err(|e| {
         Error::io(
             &args.check_root,
-            std::io::Error::new(
-                e.kind(),
-                format!("cannot resolve --check-root: {e}"),
-            ),
+            std::io::Error::new(e.kind(), format!("cannot resolve --check-root: {e}")),
         )
     })?;
     let out_dir = args
@@ -126,23 +138,24 @@ fn run() -> Result<bool> {
             run_discover(&paths, &args)?;
         } else {
             ensure_file(&paths.blast_out)?;
-            println!(
-                "==> analyzing existing {}",
-                paths.blast_out.display()
-            );
+            println!("==> analyzing existing {}", paths.blast_out.display());
         }
 
-        let report = analyze_blast_results(
-            &paths.blast_out,
-            &paths.target_fasta,
-            &alleles_tsv,
-            kind,
-        )?;
+        let report =
+            analyze_blast_results(&paths.blast_out, &paths.target_fasta, &alleles_tsv, kind)?;
         let text = format_report(&report);
         print!("{text}");
         let analysis_path = out_dir.join(format!("analysis-{}.txt", kind.as_str()));
         std::fs::write(&analysis_path, &text).map_err(|e| Error::io(&analysis_path, e))?;
         reports.push(report);
+
+        if args.evidence {
+            let text = evidence_report(&paths, &args)?;
+            print!("{text}");
+            let path = out_dir.join(format!("evidence-{}.txt", kind.as_str()));
+            std::fs::write(&path, &text).map_err(|e| Error::io(&path, e))?;
+            println!("Evidence report saved to: {}", path.display());
+        }
     }
 
     let summary = format_overall_summary(&reports);
@@ -181,6 +194,38 @@ fn run() -> Result<bool> {
         println!("PASS: all checked KI targets recovered within FP limits.");
     }
     Ok(ok)
+}
+
+/// Evaluate the evidence statistics on the unfiltered clusters of a gene
+/// segment against its database and target FASTAs.
+fn evidence_report(paths: &GenePaths, args: &Args) -> Result<String> {
+    let clusters = unfiltered_sidecar(&paths.blast_out);
+    if !clusters.is_file() {
+        return Err(Error::invalid(format!(
+            "missing {}: run without --skip-discover, or run discover blast with -v",
+            clusters.display()
+        )));
+    }
+    let (mut observations, n_donors) = evidence::read_clusters(&clusters)?;
+    let models = evidence::assess(&mut observations, n_donors);
+    let classes = classify(&observations, &paths.origin_fasta, &paths.target_fasta)?;
+    let resolved = ki_resolved(paths.kind);
+    let thresholds = Thresholds {
+        min_count: resolved.min_full_count.max(0) as u64,
+        min_ratio: resolved.min_full_ratio,
+    };
+    Ok(format!(
+        "\n======== Evidence, {} ========\n{}",
+        paths.kind.as_str(),
+        format_evidence_report(
+            &observations,
+            &classes,
+            n_donors,
+            &models,
+            thresholds,
+            args.evidence_list
+        )
+    ))
 }
 
 fn parse_genes(s: &str) -> Result<Vec<GeneKind>> {
@@ -347,7 +392,8 @@ fn run_discover(paths: &GenePaths, args: &Args) -> Result<()> {
         keep_failed: false,
         min_core_coverage: resolved.min_core_coverage,
         top: 1,
-        verbose: false,
+        // The evidence report reads the unfiltered clusters, written with -v.
+        verbose: args.evidence,
         work_dir: args.work_dir.clone(),
     };
     println!("  params: {params:?}");
@@ -358,7 +404,10 @@ fn format_overall_summary(reports: &[RecoveryReport]) -> String {
     use std::fmt::Write;
     let mut out = String::new();
     let _ = writeln!(out, "{}", "=".repeat(80));
-    let _ = writeln!(out, "TARGET ALLELE RECOVERY ANALYSIS - FINAL SUMMARY REPORT");
+    let _ = writeln!(
+        out,
+        "TARGET ALLELE RECOVERY ANALYSIS - FINAL SUMMARY REPORT"
+    );
     let _ = writeln!(out, "{}", "=".repeat(80));
     let _ = writeln!(out, "Generated: {}", chrono::Local::now());
     let _ = writeln!(out);
