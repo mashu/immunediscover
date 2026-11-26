@@ -13,6 +13,7 @@ use crate::stats::robust::auc;
 /// Evidence from which a donor counts as supporting a sequence.
 const SUPPORT: f64 = 1.0;
 const CUTS: [f64; 6] = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0];
+const MAX_COST_LINES: usize = 10;
 
 pub(super) struct Sequence<'a> {
     pub class: Class,
@@ -25,7 +26,8 @@ pub(super) struct Sequence<'a> {
     /// Donors with evidence of at least [`SUPPORT`].
     pub supporting: usize,
     /// Strongest evidence among the donors passing the count thresholds;
-    /// `None` when no donor passes them.
+    /// `None` when no donor passes them. A donor too shallow to be assessed
+    /// counts as infinite: nothing speaks against the sequence there.
     pub passing_evidence: Option<f64>,
     /// Median dosage over the donors carrying the sequence.
     pub typical_dosage: f64,
@@ -114,7 +116,7 @@ pub(super) fn summarise<'a>(plate: &Plate<'a>) -> Vec<Sequence<'a>> {
                 supporting: supporting.len(),
                 passing_evidence: observations()
                     .filter(|o| plate.thresholds.passes(o))
-                    .map(evidence_or_lowest)
+                    .map(|o| o.evidence.score.unwrap_or(f64::INFINITY))
                     .reduce(f64::max),
                 typical_dosage: if carried.is_empty() {
                     best.evidence.dosage.unwrap_or(f64::NAN)
@@ -246,21 +248,93 @@ pub(super) fn write_rules(out: &mut String, plate: &Plate, sequences: &[Sequence
             s.passing_evidence.is_some_and(|e| e >= cut)
         });
     }
-    line("copy-like amount (evidence > 0)", &|s| {
+    line("fewer artifacts than candidates (evidence > 0)", &|s| {
         s.evidence().is_some_and(|e| e > 0.0)
     });
     for cut in CUTS {
         line(&format!("evidence >= {cut}"), &|s| s.at_least(cut));
     }
-    // The evidence cut keeping as many targets as the thresholds do.
-    let kept_now = targets.iter().filter(|s| s.passes()).count();
-    let mut target_evidence: Vec<f64> = targets.iter().filter_map(|s| s.evidence()).collect();
-    target_evidence.sort_by(|a, b| b.total_cmp(a));
-    let cut = kept_now.checked_sub(1).and_then(|i| target_evidence.get(i));
-    if let Some(cut) = cut.filter(|cut| **cut > 0.0) {
-        line(
-            &format!("evidence >= {cut:.2} (targets as with {thresholds})"),
-            &|s| s.at_least(*cut),
+}
+
+/// How many other sequences a cut on the evidence removes from today's
+/// calls, by the number of targets it costs.
+pub(super) fn write_cost(out: &mut String, plate: &Plate, sequences: &[Sequence]) {
+    let passing = |class: Class| -> Vec<&Sequence> {
+        sequences
+            .iter()
+            .filter(|s| s.class == class && s.passes())
+            .collect()
+    };
+    let (targets, others) = (passing(Class::Target), passing(Class::Other));
+    let mut of_targets: Vec<f64> = targets.iter().filter_map(|s| s.passing_evidence).collect();
+    of_targets.sort_by(f64::total_cmp);
+    let _ = writeln!(
+        out,
+        "\n== {} and evidence >= cut: what the cut removes ({} targets, {} other sequences pass today)",
+        plate.thresholds.label(),
+        targets.len(),
+        others.len()
+    );
+    let _ = writeln!(
+        out,
+        "  targets lost    cut   other, segregating  other, not segregating   of them 4+ differences from the database"
+    );
+    // Every cut that would cost one more target, weakest target first.
+    let mut cuts = of_targets.clone();
+    cuts.dedup();
+    for cut in cuts.into_iter().take(MAX_COST_LINES) {
+        let kept: Vec<&&Sequence> = others
+            .iter()
+            .filter(|s| s.passing_evidence.is_some_and(|e| e >= cut))
+            .collect();
+        let _ = writeln!(
+            out,
+            "  {:12}  {}   {:18}  {:22}   {:7}",
+            of_targets.iter().filter(|e| **e < cut).count(),
+            number(cut),
+            kept.iter().filter(|s| !s.ubiquitous()).count(),
+            kept.iter().filter(|s| s.ubiquitous()).count(),
+            kept.iter().filter(|s| s.best.db_distance >= 4).count(),
+        );
+    }
+}
+
+/// Differences from the nearest database allele, for today's calls.
+pub(super) fn write_distances(out: &mut String, plate: &Plate, sequences: &[Sequence]) {
+    let _ = writeln!(
+        out,
+        "\n== Differences from the nearest database allele, sequences passing {}",
+        plate.thresholds.label()
+    );
+    let _ = writeln!(
+        out,
+        "  class         sequences      1      2      3    4-5   6-10    >10"
+    );
+    for class in [Class::Target, Class::OtherTarget, Class::Other] {
+        let items: Vec<&Sequence> = sequences
+            .iter()
+            .filter(|s| s.class == class && s.passes())
+            .collect();
+        if items.is_empty() {
+            continue;
+        }
+        let within = |low: u64, high: u64| {
+            items
+                .iter()
+                .filter(|s| (low..=high).contains(&s.best.db_distance))
+                .count()
+        };
+        let _ = writeln!(
+            out,
+            "  {:<12} {:10} {:6} {:6} {:6} {:6} {:6} {:6}",
+            class.label(),
+            items.len(),
+            within(0, 1),
+            within(2, 2),
+            within(3, 3),
+            within(4, 5),
+            within(6, 10),
+            within(11, u64::MAX),
         );
     }
 }
@@ -306,7 +380,7 @@ pub(super) fn write_strongest_others(out: &mut String, sequences: &[Sequence], l
         .filter(|s| s.class == Class::Other && s.evidence().is_some_and(|e| e > 0.0))
         .collect();
     if others.is_empty() {
-        let _ = writeln!(out, "  none in a copy-like amount");
+        let _ = writeln!(out, "  none with evidence above 0");
         return;
     }
     others.sort_by(|a, b| by_strength(b.best, a.best));
@@ -324,11 +398,11 @@ pub(super) fn write_weakest_targets(out: &mut String, sequences: &[Sequence], li
     }
     let _ = writeln!(
         out,
-        "\n== Targets with evidence below {SUPPORT} in every donor, or not assessed"
+        "\n== Targets with evidence below {SUPPORT} in every donor"
     );
     let mut weak: Vec<&Sequence> = sequences
         .iter()
-        .filter(|s| s.class == Class::Target && !s.at_least(SUPPORT))
+        .filter(|s| s.class == Class::Target && s.evidence().is_some_and(|e| e < SUPPORT))
         .collect();
     weak.sort_by(|a, b| by_strength(a.best, b.best));
     let total = weak.len();
@@ -385,8 +459,9 @@ mod tests {
         assert_eq!(a.class, Class::Target);
         assert_eq!(a.best.donor, 0);
         assert_eq!((a.donors, a.supporting, a.max_count), (3, 1, 200));
-        // Donors 0 and 2 pass the thresholds; only donor 0 is assessed.
-        assert_eq!(a.passing_evidence, Some(2.5));
+        // Donors 0 and 2 pass the thresholds; donor 2 is too shallow to be
+        // assessed, which does not speak against the sequence.
+        assert_eq!(a.passing_evidence, Some(f64::INFINITY));
         // Carried at 1 and 2 copies (the 3-read donor does not carry it).
         assert_eq!(a.typical_dosage, 1.5);
         assert!(!sequences[1].passes());

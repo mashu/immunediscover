@@ -80,41 +80,55 @@ donor; the rest of the plate is only used to learn rates:
 
 | Quantity | Meaning |
 |---|---|
-| dosage | estimated copies. Genomic DNA carries every gene in the same number of copies, so reads of a gene in a donor = DNA amount x primer efficiency x copies; both factors are fitted over the plate. About 1 for a heterozygous allele, 2 for a homozygous one, far below 1 for artifacts |
+| dosage | estimated copies. Genomic DNA carries every gene in the same number of copies, so reads of a gene in a donor = DNA amount x primer efficiency x copies; both factors are fitted over the plate, on the database alleles of every gene. About 1 for a heterozygous allele, 2 for a homozygous one, far below 1 for artifacts |
 | kind | what the sequence could be an artifact of: 1, 2, 3 or more differences from a more abundant sequence of the gene in the donor, a chimera of two of them, or nothing (it is the top sequence of its gene) |
-| evidence | -log10 of the share of artifacts expected among the sequences of the same kind holding at least this dosage: 1 = one in ten, 2 = one in a hundred. 0 below a copy-like amount |
-| does not segregate | in a copy-like amount in at least 90% of the donors, or at the same ratio to its parent in 90% of the other donors. Such a sequence is not a sporadic artifact, and not shown to be an allele of this gene either: another locus, or a systematic artifact |
+| evidence | -log10 of the share of artifacts expected among the sequences of the same kind around this dosage: 1 = one in ten, 2 = one in a hundred, 0 = as many artifacts as candidates |
+| d(db) | differences from the nearest database allele. Not part of the evidence: a sequence many differences away may be perfectly real and still belong to another locus or a pseudogene |
+| does not segregate | in a copy-like amount in at least 90% of the donors, or at the same ratio to its parent in 90% of the other donors. Such a sequence is not a sporadic artifact, and not shown to be an allele of this gene either |
 | carriers, private | donors holding a copy-like amount; private = no other donor does |
 
-How the evidence is obtained (`src/evidence/artifact_rate.rs`):
+The unit of one copy (`src/evidence/amplification.rs`):
 
-1. One copy varies around a dosage of 1 by the allele-level spread measured
-   on the database alleles of the plate. Below the lowest 1% of single
-   copies (the *edge*, about 0.6 to 0.7) a sequence is not a copy.
-2. Artifacts of a kind are counted in three windows of half a decade of
-   dosage below the edge, among sequences private to one donor and absent
-   from most others. Their decline from window to window is extrapolated
-   beyond the edge as a power-law tail; of the decline over the last window
-   and the average over the last two, the slower is used.
-3. The number of artifacts expected with at least a dosage, divided by the
-   number of candidates seen with at least that dosage, is the expected
-   share of artifacts among them (a false discovery rate). A sequence
-   private to its donor is compared with the private candidates only; one
-   that other donors carry is compared with all candidates.
+- The reads of a gene are those of its database alleles, so that a sequence
+  of another locus assigned to the gene cannot inflate it.
+- A gene has two copies unless the donors show otherwise: where a donor
+  holds two or more database alleles of a gene, the smallest is one copy,
+  and its share of the gene says how many copies there are (IGHV1-69 and
+  the like).
+- A gene seen in too few donors takes its unit from the donor itself.
+
+How the evidence is obtained (`src/evidence/artifact_rate.rs`,
+`src/evidence/recurrence.rs`):
+
+1. Below a fifth of a copy the sequences of a plate are artifacts, a few
+   exceptions aside. Those private to one donor are counted there, per
+   kind, in two windows of half a decade of dosage.
+2. The decline from the lower window to the upper one is continued upwards
+   as a power-law tail (at least 2-fold and at most 20-fold per half
+   decade). It gives the artifacts expected in any range of dosage.
+3. The artifacts expected within half a decade around a dosage, divided by
+   the candidates seen there, is the expected share of artifacts (a local
+   false discovery rate). A sequence private to its donor is compared with
+   the private candidates only; one that other donors carry is compared
+   with all candidates. More copies are never weaker evidence. There is no
+   dosage below which a sequence is declared an artifact.
+4. A variant that most donors show at a low, steady ratio to its parent (at
+   most 10% of it) is judged against itself: is this donor's amount more
+   than a fluctuation around the usual ratio? This can only lower the
+   evidence.
 
 Results stay per donor. The truth, however, is known per sequence, so the
 report judges every sequence on the donor where its evidence is strongest
 and compares the KI-cohort targets with the other non-database sequences.
 
 What to read in the report: the amplification section says whether the
-"equal copies" premise holds (small residual spread, database alleles near
-1 and 2 copies); the evidence section shows, per kind, the artifacts
-counted, the expected number beyond the edge and the candidates found; the
-gene list names genes whose database alleles sit below a copy (more than
-two copies of the gene, where one copy is less than half of it); the rules
-table compares `-c`/`-f` with cuts on the evidence, per sequence; the last
-two lists name what the evidence would add and what it would lose. The
-evidence is not used by `discover blast`.
+"equal copies" premise holds; the unit section names the genes with more
+than two copies; the evidence section shows, per kind, the artifacts
+counted, the numbers expected higher up and the candidates found; the cost
+table says how many other sequences a cut on the evidence removes from
+today's calls for every target it would cost, starting with none; the
+distance table and the two lists show what remains. The evidence is not
+used by `discover blast`.
 
 ## Commands
 

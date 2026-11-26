@@ -19,8 +19,11 @@
 //!   number of artifacts at least this abundant.
 //! * [`plate`]: how the sequence behaves across the donors of the plate.
 //! * [`artifact_rate`]: the evidence itself. Among the sequences of the
-//!   plate that are like this one and hold at least its dosage, which
-//!   share is expected to be artifacts?
+//!   plate that are like this one and hold about its dosage, which share
+//!   is expected to be artifacts?
+//! * [`recurrence`]: for a variant most donors show at a low, steady ratio
+//!   to its parent, whether this donor holds more of it than a fluctuation
+//!   explains. It can only lower the evidence.
 //!
 //! Results stay per donor: the rest of the plate is only used to learn
 //! rates and distributions, as it is for the context extension.
@@ -38,12 +41,14 @@ pub mod kinds;
 pub mod observations;
 pub mod parents;
 pub mod plate;
+pub mod recurrence;
 
 pub use amplification::Amplification;
 pub use artifact_rate::ArtifactRate;
 pub use artifacts::{RecurrentFit, SporadicFit};
 pub use kinds::Kind;
 pub use observations::{from_clusters, read_clusters};
+pub use recurrence::Recurrence;
 
 /// One sequence in one donor, summed over its extension variants.
 #[derive(Debug, Clone)]
@@ -103,9 +108,9 @@ pub struct Evidence {
     /// Its usual ratio to the parent in the other donors (median).
     pub recurrent_ratio: Option<f64>,
     /// Evidence: -log10 of the share of artifacts expected among the
-    /// sequences of the plate that are like this one and hold at least its
-    /// dosage (2 = one in a hundred). 0 below a copy-like amount; `None`
-    /// where the donor is too shallow for the gene.
+    /// sequences of the plate that are like this one and hold about its
+    /// dosage (2 = one in a hundred). 0 where artifacts are as common as
+    /// candidates; `None` where the donor is too shallow for the gene.
     pub score: Option<f64>,
 }
 
@@ -119,6 +124,7 @@ pub struct Models {
     pub sporadic: Vec<SporadicFit>,
     pub recurrent: RecurrentFit,
     pub artifact_rate: ArtifactRate,
+    pub recurrence: Recurrence,
 }
 
 /// Fit the plate models and fill in the evidence of every observation.
@@ -132,14 +138,17 @@ pub fn assess(observations: &mut [Observation], n_donors: usize) -> Models {
     let sporadic = artifacts::fit_sporadic(observations);
     let recurrent = artifacts::fit_recurrent(observations);
     artifacts::set_expectation(observations, &sporadic, &recurrent);
-    let artifact_rate = ArtifactRate::fit(observations, allele_noise);
+    let artifact_rate = ArtifactRate::fit(observations);
     artifact_rate.set_scores(observations);
+    let recurrence = Recurrence::fit(observations);
+    recurrence.limit_scores(observations);
     Models {
         amplification,
         allele_noise,
         sporadic,
         recurrent,
         artifact_rate,
+        recurrence,
     }
 }
 
