@@ -8,6 +8,7 @@
 
 pub mod affixes;
 pub mod assign;
+pub mod evidence_columns;
 pub mod flank_split;
 pub mod locate;
 pub mod runner;
@@ -73,6 +74,9 @@ pub struct BlastParams {
     /// Maximum number of extension variants reported per allele.
     pub top: usize,
     pub verbose: bool,
+    /// Add the evidence columns (copies, evidence, donors, ...) to the
+    /// output.
+    pub evidence: bool,
     pub work_dir: String,
 }
 
@@ -499,11 +503,20 @@ pub fn run(params: &BlastParams) -> Result<()> {
         params.max_distance as f64,
         "Max distance",
     ));
+    // The evidence is learned from everything the run saw, cut or not.
+    let all_clusters = params.evidence.then(|| clusters.clone());
     filter.apply(&mut clusters)?;
     let mut clusters = rank_clusters(&clusters, params.top)?;
 
     let names = allele_names(&clusters, &db, params.name_substrings_as_known)?;
     clusters.set_column("allele_name", Column::from_strings(names))?;
+    if let Some(all_clusters) = &all_clusters {
+        info!(
+            "Adding evidence columns: {}",
+            evidence_columns::COLUMNS.join(", ")
+        );
+        evidence_columns::add_evidence_columns(&mut clusters, all_clusters)?;
+    }
 
     info!(
         "Saving discovered gene sequences in compressed {} file",

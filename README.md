@@ -20,6 +20,17 @@ The port keeps the command line and the file formats of the Julia tool.
 [BUGS.md](BUGS.md) lists every fix, the choices made where a fix was not
 obvious, and what changes in the output. No known issue is open.
 
+## Documentation
+
+The user guide is in [`docs/`](docs/README.md): a walk-through from FASTQ
+to new alleles, every input file and its columns, every command with its
+options and output columns, and an explanation of the evidence columns
+that `discover blast` adds to its output (`copies`, `evidence`,
+`db_distance`, `donors`, `carriers`, `segregates`, ...).
+
+These columns are an addition to upstream. `discover blast --no-evidence`
+writes the table without them; the other columns are the same either way.
+
 ## Build
 
 ```
@@ -63,6 +74,10 @@ non-zero if any target is missed; pass `--max-fp-rate N` to also fail when
 the false-positive rate exceeds N percent.
 
 ### Evidence statistics (`--evidence`)
+
+`discover blast` writes the evidence columns for every call; what they
+mean is explained for users in [`docs/evidence.md`](docs/evidence.md).
+This section is about checking them against held-out alleles.
 
 ```
 ./target/release/ki-check --check-root /path/to/ImmuneDiscover-IGH-2026-Check --evidence

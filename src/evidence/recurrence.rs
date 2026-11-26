@@ -15,14 +15,19 @@
 //! -log10 of the number of recurrent artifacts on the plate expected to
 //! reach this far above their usual ratio.
 //!
-//! Only sequences whose usual ratio is at most
-//! [`MAX_ARTIFACT_RATIO`](super::artifacts::MAX_ARTIFACT_RATIO) of the
-//! parent are treated this way. A sequence that most donors hold in a
-//! larger amount is not an artifact of its parent; whether it segregates
-//! is reported by `ubiquitous`.
+//! Which sequences are recurrent artifacts is measured on the plate as
+//! well. The usual ratios of the variants that recur lie close together
+//! (a fraction of a percent of the parent on the plates seen so far); a
+//! sequence that most donors show at a ratio more than three spreads above
+//! their middle, or above
+//! [`MAX_ARTIFACT_RATIO`](super::artifacts::MAX_ARTIFACT_RATIO), is not one
+//! of them. It may be an allele that amplifies poorly, or a sequence of
+//! another locus; it keeps the evidence its dosage gives it, and its
+//! usual ratio is reported.
 
 use super::artifacts::MAX_ARTIFACT_RATIO;
 use super::Observation;
+use crate::stats::median;
 use crate::stats::robust::mad;
 use crate::stats::tails::log10_normal_cdf;
 
@@ -33,6 +38,9 @@ const MIN_EXPECTED_READS: f64 = 5.0;
 const MIN_ROWS: usize = 30;
 const DEFAULT_SPREAD: f64 = 0.5;
 const MIN_SPREAD: f64 = 0.2;
+/// Spreads above the middle usual ratio up to which a recurring sequence
+/// is a recurrent artifact.
+const USUAL_RATIO_SPREADS: f64 = 3.0;
 const MAX_EVIDENCE: f64 = 9.0;
 
 /// The variation of recurrent artifacts around their usual ratio.
@@ -40,26 +48,55 @@ const MAX_EVIDENCE: f64 = 9.0;
 pub struct Recurrence {
     /// SD of the log ratio between donors.
     pub spread: f64,
+    /// Highest usual ratio to the parent of a recurrent artifact.
+    pub highest_ratio: f64,
     /// Recurrent artifacts on the plate (sequence-in-donor rows).
     pub rows: usize,
 }
 
-/// Reads expected from the usual ratio, for a recurrent artifact.
-fn expected_reads(observations: &[Observation], o: &Observation) -> Option<f64> {
-    let (parent, _) = o.evidence.parent?;
-    let ratio = o
-        .evidence
+/// Usual ratio to the parent of a sequence most donors show, if it is low
+/// enough for an artifact at all.
+fn usual_ratio(o: &Observation) -> Option<f64> {
+    o.evidence
         .recurrent_ratio
-        .filter(|r| *r > 0.0 && *r <= MAX_ARTIFACT_RATIO)?;
+        .filter(|r| *r > 0.0 && *r <= MAX_ARTIFACT_RATIO)
+}
+
+/// Reads expected from the usual ratio, for a recurrent artifact.
+fn expected_reads(observations: &[Observation], o: &Observation, highest: f64) -> Option<f64> {
+    let (parent, _) = o.evidence.parent?;
+    let ratio = usual_ratio(o).filter(|r| *r <= highest)?;
     Some(observations[parent].count as f64 * ratio)
+}
+
+/// The usual ratio up to which a recurring sequence is a recurrent
+/// artifact: three spreads above the middle of the usual ratios.
+fn highest_usual_ratio(observations: &[Observation]) -> f64 {
+    let logs: Vec<f64> = observations
+        .iter()
+        .filter(|o| !o.is_database_allele() && o.evidence.parent.is_some())
+        .filter_map(usual_ratio)
+        .map(f64::ln)
+        .collect();
+    if logs.len() < MIN_ROWS {
+        return MAX_ARTIFACT_RATIO;
+    }
+    let spread = mad(&logs).max(MIN_SPREAD);
+    (median(&logs) + USUAL_RATIO_SPREADS * spread)
+        .exp()
+        .min(MAX_ARTIFACT_RATIO)
 }
 
 impl Recurrence {
     pub fn fit(observations: &[Observation]) -> Self {
+        let highest_ratio = highest_usual_ratio(observations);
         let expected: Vec<(f64, f64)> = observations
             .iter()
             .filter(|o| !o.is_database_allele())
-            .filter_map(|o| Some((o.count as f64, expected_reads(observations, o)?)))
+            .filter_map(|o| {
+                let expected = expected_reads(observations, o, highest_ratio)?;
+                Some((o.count as f64, expected))
+            })
             .collect();
         let log_ratios: Vec<f64> = expected
             .iter()
@@ -73,6 +110,7 @@ impl Recurrence {
         };
         Recurrence {
             spread,
+            highest_ratio,
             rows: expected.len(),
         }
     }
@@ -94,7 +132,10 @@ impl Recurrence {
     pub fn limit_scores(&self, observations: &mut [Observation]) {
         let limits: Vec<Option<f64>> = observations
             .iter()
-            .map(|o| Some(self.evidence(o.count, expected_reads(observations, o)?)))
+            .map(|o| {
+                let expected = expected_reads(observations, o, self.highest_ratio)?;
+                Some(self.evidence(o.count, expected))
+            })
             .collect();
         for (o, limit) in observations.iter_mut().zip(limits) {
             if let (Some(score), Some(limit)) = (o.evidence.score, limit) {
@@ -153,6 +194,7 @@ mod tests {
     fn few_reads_are_noisy() {
         let model = Recurrence {
             spread: 0.3,
+            highest_ratio: 0.1,
             rows: 2000,
         };
         // Three times the usual ratio is nothing among 2000 rows.
@@ -162,6 +204,33 @@ mod tests {
         let (few, many) = (model.evidence(30, 3.0), model.evidence(300, 30.0));
         assert!(few > 0.0 && few < 1.0, "{few}");
         assert!(many > 5.0, "{many}");
+    }
+
+    #[test]
+    fn a_sequence_recurring_far_above_the_artifacts_is_not_one_of_them() {
+        // 40 variants recurring at 0.2 to 0.5 % of their parent, and one
+        // that most donors show at 6 % of it, here at 30 %.
+        let mut observations = vec![observation(0, "A", "AAAA", 1000)];
+        for i in 0..40 {
+            let mut artifact = observation(0, "A", &format!("artifact{i}"), 3);
+            artifact.db_distance = 1;
+            artifact.evidence.parent = Some((0, 1));
+            artifact.evidence.recurrent_ratio = Some(0.002 + 0.003 * (i % 4) as f64 / 3.0);
+            artifact.evidence.score = Some(1.0);
+            observations.push(artifact);
+        }
+        let mut weak_allele = observation(0, "A", "AAAT", 300);
+        weak_allele.db_distance = 1;
+        weak_allele.evidence.parent = Some((0, 1));
+        weak_allele.evidence.recurrent_ratio = Some(0.06);
+        weak_allele.evidence.score = Some(1.5);
+        observations.push(weak_allele);
+        let model = Recurrence::fit(&observations);
+        assert!(model.highest_ratio > 0.005 && model.highest_ratio < 0.03);
+        assert_eq!(model.rows, 40);
+        model.limit_scores(&mut observations);
+        assert_eq!(observations.last().unwrap().evidence.score, Some(1.5));
+        assert_eq!(observations[1].evidence.score, Some(0.0));
     }
 
     #[test]
