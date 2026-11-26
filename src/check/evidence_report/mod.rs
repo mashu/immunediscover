@@ -90,6 +90,8 @@ pub fn format_evidence_report(plate: &Plate, list: usize) -> String {
     sequences::write_overview(&mut out, plate, &sequences);
     sequences::write_separation(&mut out, plate, &sequences);
     sequences::write_rules(&mut out, plate, &sequences);
+    sequences::write_cost(&mut out, plate, &sequences);
+    sequences::write_distances(&mut out, plate, &sequences);
     rows::write_passing_rows(&mut out, plate);
     sequences::write_strongest_others(&mut out, &sequences, list);
     sequences::write_weakest_targets(&mut out, &sequences, list);

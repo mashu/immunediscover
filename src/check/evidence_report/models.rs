@@ -1,21 +1,15 @@
 //! What was read, what the plate-level models learned, and the resulting
 //! evidence scale.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::Write as _;
 
 use super::{number, Class, Plate};
-use crate::evidence::artifact_rate::MIN_COPY_READS;
+use crate::evidence::artifact_rate::{ARTIFACT_ONLY, MIN_COPY_READS};
 use crate::evidence::artifacts::{is_sporadic_satellite, variants_at};
-use crate::evidence::plate::COPY_LIKE;
 use crate::evidence::{Kind, Observation};
 use crate::stats::robust::{mad, quantile};
 use crate::stats::tails::log10_negative_binomial_upper_tail;
-
-/// Share of a gene's database-allele rows below the edge that makes its
-/// unit suspect.
-const SUSPECT_SHARE: f64 = 0.2;
-const MAX_SUSPECT_GENES: usize = 15;
 
 fn distinct(items: &[&Observation]) -> usize {
     items
@@ -62,6 +56,15 @@ pub(super) fn write_input(out: &mut String, plate: &Plate) {
     let _ = writeln!(
         out,
         "rows not assessed (gene too shallow in the donor: fewer than {MIN_COPY_READS} reads expected per copy): {shallow}"
+    );
+    let own_unit = plate
+        .observations
+        .iter()
+        .filter(|o| o.evidence.score.is_some() && !plate.models.amplification.is_fitted(o))
+        .count();
+    let _ = writeln!(
+        out,
+        "rows assessed with the unit of their own donor (gene in too few donors): {own_unit}"
     );
 }
 
@@ -131,55 +134,44 @@ pub(super) fn write_amplification(out: &mut String, plate: &Plate) {
     }
 }
 
-/// Genes whose database alleles are often below a copy-like amount: the
-/// gene has more than two copies, or another sequence inflates its total.
-/// A real allele of such a gene can fall below the edge.
+/// Genes whose unit is not the default of two copies fitted on database
+/// alleles.
 pub(super) fn write_gene_units(out: &mut String, plate: &Plate) {
-    let edge = plate.models.artifact_rate.edge;
-    // gene => dosages of the database alleles present beyond stray reads
-    let mut by_gene: BTreeMap<&str, Vec<f64>> = BTreeMap::new();
-    for o in plate.of_class(Class::Known) {
-        if let Some(dosage) = o.evidence.dosage.filter(|d| *d >= COPY_LIKE) {
-            by_gene.entry(o.gene.as_str()).or_default().push(dosage);
+    let amplification = &plate.models.amplification;
+    let named = |keep: &dyn Fn(usize) -> bool| -> String {
+        let names: Vec<String> = (0..amplification.genes.len())
+            .filter(|g| keep(*g))
+            .map(|g| {
+                if amplification.copies[g] > 2.0 {
+                    format!("{} ({})", amplification.genes[g], amplification.copies[g])
+                } else {
+                    amplification.genes[g].clone()
+                }
+            })
+            .collect();
+        if names.is_empty() {
+            "none".to_string()
+        } else {
+            names.join(", ")
         }
-    }
-    let below = |dosages: &[f64]| {
-        dosages.iter().filter(|d| **d < edge).count() as f64 / dosages.len() as f64
     };
-    let mut suspect: Vec<(&str, &Vec<f64>)> = by_gene
-        .iter()
-        .filter(|(_, dosages)| dosages.len() >= 5 && below(dosages) >= SUSPECT_SHARE)
-        .map(|(gene, dosages)| (*gene, dosages))
-        .collect();
-    suspect.sort_by(|a, b| below(b.1).total_cmp(&below(a.1)));
+    let fitted = |g: usize| !amplification.gene[g].is_nan();
+    let _ = writeln!(out, "\n== The unit of one copy, by gene");
     let _ = writeln!(
         out,
-        "\n== Genes where one copy may not be half the gene: at least {:.0}% of database-allele rows between {COPY_LIKE} and {edge:.2} copies ({} of {} genes)",
-        100.0 * SUSPECT_SHARE,
-        suspect.len(),
-        by_gene.len()
+        "more than two copies in most donors (copies): {}",
+        named(&|g| amplification.copies[g] > 2.0)
     );
-    if suspect.is_empty() {
-        return;
-    }
     let _ = writeln!(
         out,
-        "  gene             rows  share below {edge:.2}    25%    50%    75% of dosage"
+        "no database allele in enough donors, fitted on all main sequences: {}",
+        named(&|g| fitted(g) && !amplification.from_database[g])
     );
-    for (gene, dosages) in suspect.iter().take(MAX_SUSPECT_GENES) {
-        let _ = writeln!(
-            out,
-            "  {gene:<15} {:5}              {:.2} {} {} {}",
-            dosages.len(),
-            below(dosages),
-            number(quantile(dosages, 0.25)),
-            number(quantile(dosages, 0.5)),
-            number(quantile(dosages, 0.75)),
-        );
-    }
-    if suspect.len() > MAX_SUSPECT_GENES {
-        let _ = writeln!(out, "  ... and {} more", suspect.len() - MAX_SUSPECT_GENES);
-    }
+    let _ = writeln!(
+        out,
+        "in too few donors to fit, unit taken from the donor itself: {}",
+        named(&|g| !fitted(g))
+    );
 }
 
 /// The error models are not part of the evidence; they describe the plate.
@@ -243,43 +235,53 @@ pub(super) fn write_errors(out: &mut String, plate: &Plate) {
         number(quantile(&ratios, 0.75)),
         shape(plate.models.recurrent.shape)
     );
+    let _ = writeln!(
+        out,
+        "recurrent artifacts (usual ratio at most 10% of the parent): {} rows, ratio varies between donors by a factor of {:.2} (1 SD); a row is judged against its own usual ratio",
+        plate.models.recurrence.rows,
+        plate.models.recurrence.spread.exp()
+    );
 }
+
+const SCALE_DOSAGES: [f64; 4] = [0.3, 0.5, 1.0, 2.0];
 
 pub(super) fn write_evidence_scale(out: &mut String, plate: &Plate) {
     let model = &plate.models.artifact_rate;
     let _ = writeln!(
         out,
-        "\n== Evidence: -log10 of the share of artifacts expected among sequences of the same kind with at least the same dosage (1 = one in ten, 2 = one in a hundred)"
+        "\n== Evidence: -log10 of the share of artifacts expected among sequences of the same kind around the same dosage (1 = one in ten, 2 = one in a hundred)"
     );
     let _ = writeln!(
         out,
-        "not a copy below a dosage of {:.2} (lowest 1% of single copies); artifacts counted in three windows of half a decade from {:.3} up to it, among sequences private to one donor and absent from most others",
-        model.edge,
-        model.edge / 10f64.powf(1.5)
+        "artifacts counted in two windows of half a decade below {ARTIFACT_ONLY} copies, among sequences private to one donor and absent from most others; their decline is continued upwards"
     );
     let _ = writeln!(
         out,
-        "  kind (vs. more abundant sequence)  artifacts: lowest  middle  highest  thinning per half decade   expected above: edge  1 copy  2 copies   candidates: private    all   evidence at 1 copy: private  shared"
+        "  kind (vs. more abundant sequence)  artifacts: lower  upper  thinning per half decade   expected above: {ARTIFACT_ONLY}     0.6       2   candidates: private    all   evidence, private at: 0.3   0.5     1     2   shared at: 0.3   0.5     1     2"
     );
     for kind in Kind::ALL {
         let tail = model.tail(kind);
         let (private, all) = model.candidates(kind);
-        let _ = writeln!(
+        let _ = write!(
             out,
-            "  {:<33} {:17} {:7} {:8}  {:>8} {:<15}                {}  {}    {}   {:19} {:6}                       {:5.2}   {:5.2}",
+            "  {:<33} {:16} {:6}  {:>8} {:<15}                {}  {}  {}   {:19} {:6}                      ",
             kind.label(),
             tail.windows[0],
             tail.windows[1],
-            tail.windows[2],
             format!("{:.3}", tail.decline),
             if tail.own_decline { "" } else { "(all kinds)" },
-            number(tail.expected(model.edge)),
-            number(tail.expected(1.0)),
+            number(tail.expected(ARTIFACT_ONLY)),
+            number(tail.expected(0.6)),
             number(tail.expected(2.0)),
             private,
             all,
-            model.evidence(kind, true, 1.0),
-            model.evidence(kind, false, 1.0),
         );
+        for is_private in [true, false] {
+            for dosage in SCALE_DOSAGES {
+                let _ = write!(out, " {:5.2}", model.evidence(kind, is_private, dosage));
+            }
+            let _ = write!(out, "            ");
+        }
+        let _ = writeln!(out);
     }
 }
