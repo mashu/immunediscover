@@ -10,6 +10,9 @@ use crate::frame::Frame;
 use crate::io::tsv::{read_table, ReadOptions};
 use crate::seq::gene_of;
 
+/// Well and case of a donor.
+pub type Donor = (String, String);
+
 /// Read a cluster table and collapse it to one observation per sequence
 /// and donor. Returns the observations and the number of donors.
 pub fn read_clusters(path: &Path) -> Result<(Vec<Observation>, usize)> {
@@ -26,6 +29,13 @@ pub fn read_clusters(path: &Path) -> Result<(Vec<Observation>, usize)> {
 /// sequence and are left out. A sequence hit under several database
 /// alleles takes the best supported one as `nearest`.
 pub fn from_clusters(clusters: &Frame) -> Result<(Vec<Observation>, usize)> {
+    let (observations, donors) = from_clusters_with_donors(clusters)?;
+    Ok((observations, donors.len()))
+}
+
+/// As [`from_clusters`], with the well and case of every donor, in the
+/// order of the donor numbers of the observations.
+pub fn from_clusters_with_donors(clusters: &Frame) -> Result<(Vec<Observation>, Vec<Donor>)> {
     let text = |name: &str| -> Result<Vec<String>> {
         Ok(clusters
             .column(name)?
@@ -115,7 +125,11 @@ pub fn from_clusters(clusters: &Frame) -> Result<(Vec<Observation>, usize)> {
         o.gene = gene_of(&nearest).to_string();
         o.nearest = nearest;
     }
-    Ok((observations, donors.len()))
+    let mut keys = vec![(String::new(), String::new()); donors.len()];
+    for ((well, case), donor) in donors {
+        keys[donor] = (well.to_string(), case.to_string());
+    }
+    Ok((observations, keys))
 }
 
 #[cfg(test)]

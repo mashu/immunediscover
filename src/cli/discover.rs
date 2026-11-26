@@ -127,6 +127,12 @@ pub struct BlastArgs {
     /// summarised in `*.flank-split.tsv.gz` when any exist.
     #[arg(short = 'v', long = "verbose")]
     verbose: bool,
+    /// Leave out the evidence columns (db_distance, copies, evidence,
+    /// relation, donors, carriers, segregates, usual_parent_ratio). They
+    /// describe how much of every reported sequence a donor holds and what
+    /// the other donors of the plate say about it; see docs/evidence.md.
+    #[arg(long = "no-evidence")]
+    no_evidence: bool,
     /// Directory for BLAST cache, temporary query FASTA, combined/extended DB, and affix files
     /// (relative paths use the current directory). Nothing is written beside the input TSV.
     #[arg(long = "work-dir", default_value = DEFAULT_WORK_DIR)]
@@ -181,6 +187,7 @@ impl BlastArgs {
             min_core_coverage: resolved.min_core_coverage,
             top: self.top,
             verbose: self.verbose,
+            evidence: !self.no_evidence,
             work_dir: self.work_dir,
         };
         info!("Running with the following parameters:");

@@ -399,6 +399,7 @@ fn run_discover(paths: &GenePaths, args: &Args) -> Result<()> {
         top: 1,
         // The evidence report reads the unfiltered clusters, written with -v.
         verbose: args.evidence,
+        evidence: true,
         work_dir: args.work_dir.clone(),
     };
     println!("  params: {params:?}");
