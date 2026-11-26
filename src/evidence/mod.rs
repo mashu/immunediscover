@@ -18,23 +18,31 @@
 //!   at its usual ratio in the other donors). They give the expected
 //!   number of artifacts at least this abundant.
 //! * [`plate`]: how the sequence behaves across the donors of the plate.
+//! * [`artifact_rate`]: the evidence itself. Among the sequences of the
+//!   plate that are like this one and hold at least its dosage, which
+//!   share is expected to be artifacts?
 //!
 //! Results stay per donor: the rest of the plate is only used to learn
-//! rates, as it is for the context extension.
+//! rates and distributions, as it is for the context extension.
 //!
-//! The combined [`score`] is provisional. It exists to find out, on plates
-//! with known truth, whether these quantities separate real alleles from
-//! artifacts better than count thresholds do.
+//! What the evidence measures is whether a sequence is present in a donor
+//! in a copy-like amount. It does not say which gene the sequence belongs
+//! to: a sequence at the same level in every donor, or in more than two
+//! copies, may be as real as any and still come from another locus (see
+//! `ubiquitous`).
 
 pub mod amplification;
+pub mod artifact_rate;
 pub mod artifacts;
+pub mod kinds;
 pub mod observations;
 pub mod parents;
 pub mod plate;
-pub mod score;
 
 pub use amplification::Amplification;
+pub use artifact_rate::ArtifactRate;
 pub use artifacts::{RecurrentFit, SporadicFit};
+pub use kinds::Kind;
 pub use observations::{from_clusters, read_clusters};
 
 /// One sequence in one donor, summed over its extension variants.
@@ -68,6 +76,8 @@ impl Observation {
 /// could not be computed.
 #[derive(Debug, Clone, Default)]
 pub struct Evidence {
+    /// Reads one copy of the gene is expected to give in this donor.
+    pub per_copy_reads: Option<f64>,
     /// Estimated copies: 1 is one chromosome's worth of reads.
     pub dosage: Option<f64>,
     /// log10 P(at most this many reads | one real copy).
@@ -81,11 +91,21 @@ pub struct Evidence {
     pub chimera: bool,
     /// Donors on the plate holding a copy-like amount of the sequence.
     pub carriers: usize,
+    /// Share of the other donors in which its ratio to the parent is the
+    /// same as here (within a factor of three).
+    pub steady: Option<f64>,
+    /// It does not segregate in this cohort: carried by at least
+    /// [`plate::UBIQUITOUS_SHARE`] of the donors, or at the same ratio to
+    /// its parent in that share of the other donors.
+    pub ubiquitous: bool,
     /// Share of the parent's carriers in which the sequence is seen at all.
     pub tracking: Option<f64>,
     /// Its usual ratio to the parent in the other donors (median).
     pub recurrent_ratio: Option<f64>,
-    /// Provisional combined evidence, log10 units.
+    /// Evidence: -log10 of the share of artifacts expected among the
+    /// sequences of the plate that are like this one and hold at least its
+    /// dosage (2 = one in a hundred). 0 below a copy-like amount; `None`
+    /// where the donor is too shallow for the gene.
     pub score: Option<f64>,
 }
 
@@ -98,6 +118,7 @@ pub struct Models {
     /// Sporadic error fits for 1, 2 and 3 differences.
     pub sporadic: Vec<SporadicFit>,
     pub recurrent: RecurrentFit,
+    pub artifact_rate: ArtifactRate,
 }
 
 /// Fit the plate models and fill in the evidence of every observation.
@@ -107,16 +128,18 @@ pub fn assess(observations: &mut [Observation], n_donors: usize) -> Models {
     let allele_noise = amplification::allele_noise(observations);
     amplification.set_copy_tail(observations, allele_noise);
     parents::assign(observations);
-    plate::set_context(observations);
+    plate::set_context(observations, n_donors);
     let sporadic = artifacts::fit_sporadic(observations);
     let recurrent = artifacts::fit_recurrent(observations);
     artifacts::set_expectation(observations, &sporadic, &recurrent);
-    score::set(observations);
+    let artifact_rate = ArtifactRate::fit(observations, allele_noise);
+    artifact_rate.set_scores(observations);
     Models {
         amplification,
         allele_noise,
         sporadic,
         recurrent,
+        artifact_rate,
     }
 }
 
