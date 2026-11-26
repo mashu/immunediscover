@@ -342,13 +342,13 @@ pub(super) fn write_distances(out: &mut String, plate: &Plate, sequences: &[Sequ
 fn write_sequence_lines(out: &mut String, items: &[&Sequence]) {
     let _ = writeln!(
         out,
-        "  gene            nearest allele        d(db)  kind            count  dosage  evidence  reads per copy  donors  with evidence >= {SUPPORT}  carriers  typical copies  passes  note"
+        "  gene            nearest allele        d(db)  kind            count  dosage  evidence  reads per copy  donors  with evidence >= {SUPPORT}  carriers  typical copies  usual % of parent  passes  note"
     );
     for s in items {
         let o = s.best;
         let _ = writeln!(
             out,
-            "  {:<15} {:<22} {:4}  {:<14} {:6}  {}    {}          {}  {:6}  {:20}  {:8}          {}  {:<6}  {}",
+            "  {:<15} {:<22} {:4}  {:<14} {:6}  {}    {}          {}  {:6}  {:20}  {:8}          {}             {}  {:<6}  {}",
             o.gene,
             o.nearest,
             o.db_distance,
@@ -361,6 +361,7 @@ fn write_sequence_lines(out: &mut String, items: &[&Sequence]) {
             s.supporting,
             o.evidence.carriers,
             number(s.typical_dosage),
+            optional(o.evidence.recurrent_ratio.map(|r| 100.0 * r)),
             if s.passes() { "yes" } else { "no" },
             s.note()
         );
@@ -402,7 +403,14 @@ pub(super) fn write_weakest_targets(out: &mut String, sequences: &[Sequence], li
     );
     let mut weak: Vec<&Sequence> = sequences
         .iter()
-        .filter(|s| s.class == Class::Target && s.evidence().is_some_and(|e| e < SUPPORT))
+        .filter(|s| {
+            // The donors the sequence is called in today count, where there
+            // are any; one too shallow to assess does not speak against it.
+            s.class == Class::Target
+                && s.passing_evidence
+                    .or(s.evidence())
+                    .is_some_and(|e| e < SUPPORT)
+        })
         .collect();
     weak.sort_by(|a, b| by_strength(a.best, b.best));
     let total = weak.len();

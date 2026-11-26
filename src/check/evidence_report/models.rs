@@ -237,7 +237,8 @@ pub(super) fn write_errors(out: &mut String, plate: &Plate) {
     );
     let _ = writeln!(
         out,
-        "recurrent artifacts (usual ratio at most 10% of the parent): {} rows, ratio varies between donors by a factor of {:.2} (1 SD); a row is judged against its own usual ratio",
+        "recurrent artifacts (usual ratio at most {:.2}% of the parent, three spreads above the middle of the variants that recur): {} rows, ratio varies between donors by a factor of {:.2} (1 SD); a row is judged against its own usual ratio",
+        100.0 * plate.models.recurrence.highest_ratio,
         plate.models.recurrence.rows,
         plate.models.recurrence.spread.exp()
     );
