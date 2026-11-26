@@ -43,7 +43,7 @@ and whether the sequence segregates.
 | IGHV3-15*01_S5678 | 648 | 11 | 9.8 | 6.4 | top of gene | 95 | 95 | false |
 | IGHV2-26*02_S9012 | 19 | 1 | 0.33 | 0 | 1 difference | 2 | 1 | true |
 
-(Illustrative values.)
+These values are made up to show the three typical cases.
 
 - **First row.** One copy, one difference from the database, evidence 2.4
   (fewer than one in a hundred such sequences is an artifact), carried by
@@ -69,8 +69,9 @@ and whether the sequence segregates.
 | 0 | none: indistinguishable from the artifacts of the plate |
 | empty | not judged: fewer than 20 reads expected per copy of this gene in this donor |
 
-Evidence says nothing about which gene a sequence belongs to. Always read
-it together with `db_distance`, `copies` and `segregates`.
+!!! warning "Evidence is about artifacts, not about genes"
+    Evidence says nothing about which gene a sequence belongs to. Always
+    read it together with `db_distance`, `copies` and `segregates`.
 
 ## How it is computed
 
