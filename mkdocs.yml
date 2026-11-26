@@ -1,0 +1,54 @@
+site_name: immunediscover
+site_description: Germline immune receptor allele discovery from plate-based genomic libraries
+site_url: https://mashu.github.io/immunediscover/
+repo_url: https://github.com/mashu/immunediscover
+repo_name: mashu/immunediscover
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+
+nav:
+  - Overview: index.md
+  - Getting started: getting-started.md
+  - Input files: inputs.md
+  - Finding new alleles:
+      - discover blast: discover-blast.md
+      - Evidence columns: evidence.md
+  - All commands: commands.md
+  - For developers: developers.md
+
+markdown_extensions:
+  - tables
+  - admonition
+  - attr_list
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+
+validation:
+  links:
+    anchors: warn
+    not_found: warn

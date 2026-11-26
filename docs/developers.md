@@ -1,0 +1,291 @@
+# For developers
+
+Notes on the code, on how results compare with the Julia original, and on
+the self-check against held-out alleles. Nothing here is needed to use
+the program.
+
+## History
+
+immunediscover is a Rust port of
+[immunediscover.jl](https://github.com/mashu/immunediscover.jl) (commit
+`b89d5cc`). The port keeps the command line and the file formats of the Julia tool.
+
+- **0.1.0** reproduced the Julia tool exactly, bugs included (148 of 163
+  compared outputs byte-identical, the rest explained).
+- **0.2.0** fixed the upstream bugs found during the port.
+- **0.3.0** made read counts mean the same thing in every command:
+  `full_count`, `count`, `full_ratio`, `ratio`, `flank_index` and `--top`
+  behave identically in `search exact` and `discover blast`; added
+  `--extension-maxdist`.
+- **0.4.0** (this version): alleles without reads take the context of their
+  gene; `search bwa` ignores letter case; `--refgene` ratios are empty
+  where the reference is absent.
+
+The evidence columns of `discover blast` are an addition to upstream;
+`--no-evidence` writes the table without them.
+
+## Building and testing
+
+```
+cargo build --release          # target/release/immunediscover
+cargo build --release --bin ki-check
+cargo test
+```
+
+Rust 1.82 or newer. External programs, looked up on `PATH` when the
+corresponding command runs:
+
+| Command | Needs |
+|---|---|
+| `discover blast` | `blastn`, `makeblastdb` (BLAST+ 2.15–2.17) |
+| `search bwa` | `bwa` (0.7.x) and a `bwa index` of the genome |
+| `ki-check` | same as `discover blast` |
+
+## KI allele recovery self-check
+
+`ki-check` runs `discover blast` on the KI demultiplex tables and checks
+that every KI `_S` target allele is recovered (matching logic of
+`ImmuneDiscover-IGH-2026-Check/check_target_alleles.jl`), while counting
+extra `_S` calls as false positives.
+
+```
+cargo build --release --bin ki-check
+
+# Full run (discovery + recovery report):
+./target/release/ki-check \
+  --check-root /path/to/ImmuneDiscover-IGH-2026-Check
+
+# Re-score existing BLAST tables only:
+./target/release/ki-check \
+  --check-root /path/to/ImmuneDiscover-IGH-2026-Check \
+  --out-dir /path/to/ImmuneDiscover-IGH-2026-Check/analysis_results \
+  --skip-discover
+```
+
+Defaults write under `{check-root}/analysis_results_rs/`. Exit status is
+non-zero if any target is missed; pass `--max-fp-rate N` to also fail when
+the false-positive rate exceeds N percent.
+
+### Evidence statistics (`--evidence`)
+
+`discover blast` writes the evidence columns for every call; what they
+mean is explained for users in [Evidence](evidence.md).
+This section is about checking them against held-out alleles.
+
+```
+./target/release/ki-check --check-root /path/to/ImmuneDiscover-IGH-2026-Check --evidence
+```
+
+runs discovery with `-v`, so that the unfiltered clusters are kept, and then
+asks whether the evidence separates the KI targets from everything else
+(`evidence-{V,D,J}.txt` in the output directory). With `--skip-discover` the
+`KI-blast-*.unfiltered.tsv.gz` tables must already exist. The report is
+aggregate only: no donor identifiers and no sequences; `--evidence-list 0`
+also drops the lists of gene and allele names.
+
+The evidence comes from `src/evidence/` and is computed per sequence and
+donor; the rest of the plate is only used to learn rates:
+
+| Quantity | Meaning |
+|---|---|
+| dosage | estimated copies. Genomic DNA carries every gene in the same number of copies, so reads of a gene in a donor = DNA amount x primer efficiency x copies; both factors are fitted over the plate, on the database alleles of every gene. About 1 for a heterozygous allele, 2 for a homozygous one, far below 1 for artifacts |
+| kind | what the sequence could be an artifact of: 1, 2, 3 or more differences from a more abundant sequence of the gene in the donor, a chimera of two of them, or nothing (it is the top sequence of its gene) |
+| evidence | -log10 of the share of artifacts expected among the sequences of the same kind around this dosage: 1 = one in ten, 2 = one in a hundred, 0 = as many artifacts as candidates |
+| d(db) | differences from the nearest database allele. Not part of the evidence: a sequence many differences away may be perfectly real and still belong to another locus or a pseudogene |
+| does not segregate | in a copy-like amount in at least 90% of the donors, or at the same ratio to its parent in 90% of the other donors. Such a sequence is not a sporadic artifact, and not shown to be an allele of this gene either |
+| carriers, private | donors holding a copy-like amount; private = no other donor does |
+
+The unit of one copy (`src/evidence/amplification.rs`):
+
+- The reads of a gene are those of its database alleles, so that a sequence
+  of another locus assigned to the gene cannot inflate it.
+- A gene has two copies unless the donors show otherwise: where a donor
+  holds two or more database alleles of a gene, the smallest is one copy,
+  and its share of the gene says how many copies there are (IGHV1-69 and
+  the like).
+- A gene seen in too few donors takes its unit from the donor itself.
+
+How the evidence is obtained (`src/evidence/artifact_rate.rs`,
+`src/evidence/recurrence.rs`):
+
+1. Below a fifth of a copy the sequences of a plate are artifacts, a few
+   exceptions aside. Those private to one donor are counted there, per
+   kind, in two windows of half a decade of dosage.
+2. The decline from the lower window to the upper one is continued upwards
+   as a power-law tail (at least 2-fold and at most 20-fold per half
+   decade). It gives the artifacts expected in any range of dosage.
+3. The artifacts expected within half a decade around a dosage, divided by
+   the candidates seen there, is the expected share of artifacts (a local
+   false discovery rate). A sequence private to its donor is compared with
+   the private candidates only; one that other donors carry is compared
+   with all candidates. More copies are never weaker evidence. There is no
+   dosage below which a sequence is declared an artifact.
+4. A variant that most donors show at a low, steady ratio to its parent (at
+   most 10% of it) is judged against itself: is this donor's amount more
+   than a fluctuation around the usual ratio? This can only lower the
+   evidence.
+
+Results stay per donor. The truth, however, is known per sequence, so the
+report judges every sequence on the donor where its evidence is strongest
+and compares the KI-cohort targets with the other non-database sequences.
+
+What to read in the report: the amplification section says whether the
+"equal copies" premise holds; the unit section names the genes with more
+than two copies; the evidence section shows, per kind, the artifacts
+counted, the numbers expected higher up and the candidates found; the cost
+table says how many other sequences a cut on the evidence removes from
+today's calls for every target it would cost, starting with none; the
+distance table and the two lists show what remains. The evidence is not
+used by `discover blast`.
+
+## Layout
+
+The crate is a library plus a thin binary. Dependencies point downwards
+only: `cli → commands → {frame, io, seq, align, stats, filters}`.
+
+```
+src/
+  main.rs, lib.rs, error.rs, logging.rs
+  cli/        clap definitions only: one file per command group, BLAST
+              presets, validators, invocation log. Converts arguments into
+              the commands' *Params structs; contains no analysis code.
+  commands/   one module per sub-command, each exposing `Params` + `run`
+    preprocess/  demultiplex, pattern (barcode matching), simulate
+    search/      exact/{scan, flanks, border, summarize, frequencies, refgene}
+                 heptamer, bwa/{aligner, cigar}
+    discover/    blast/{runner, workdir, locate, affixes, trim, assign}
+                 hsmm/{model, scan}, profile
+    variants.rs  the one definition of full_count / count / ratios /
+                 flank_index / top, used by search exact and discover blast
+    analyze/     cooccurrence/{stats, cluster}, haplotype/{flanks, genotype}
+    table/       join, filter, transform, simple, to_fasta, collect, exclude
+    fasta/       keyed_set, merge, diff
+  frame/      small typed data frame with the DataFrames.jl semantics the
+              tool depends on: column type inference, group order, stable
+              sorts with missing values, join row order, float printing
+  io/         TSV/CSV (CSV.jl 0.10 compatible), FASTA, FASTQ, gzip sniffing
+  seq/        gene types, allele naming (`_S####` hashes), DNA helpers,
+              multi-pattern search, database and demultiplex-table loading
+  align/      Needleman-Wunsch (port of BioAlignments.jl, same traceback
+              priority), EDNAFULL, semi-global mode, edit distance, banded
+              approximate matching
+  stats/      hypergeometric tail, Benjamini-Hochberg, hierarchical
+              clustering (port of Clustering.jl), descriptive statistics
+  filters/    `RowFilter` trait and the threshold filters combined by
+              `GermlineFilter` (reports rows removed per criterion)
+  evidence/   copies, relation to other sequences, plate context, the
+              artifact rate and recurrent artifacts behind the evidence
+              columns of `discover blast`
+  check/      recovery of held-out alleles and the evidence report
+  bin/        ki_check.rs, the self-check binary
+docs/         the user guide (this site); mkdocs.yml at the top level
+```
+
+Design rules followed throughout:
+
+- **Commands are plain functions of a parameter struct.** Nothing below
+  `cli/` knows about clap, so every command can be called from tests or from
+  other code.
+- **One responsibility per file**; the largest source file is about 500
+  lines, most are under 200.
+- **Behaviour that must match Julia is isolated and named.** DataFrames/CSV
+  semantics live in `frame/` and `io/`; every bug fix is one function or
+  one small module.
+- **Traits for open-ended variation** (`RowFilter`); enums for closed sets
+  (gene type, linkage, join kind); plain structs elsewhere.
+- **Errors are values**: failures on user input are reported through
+  `error::Error` and printed as one `ERROR:` line.
+
+## Context extension in `discover blast`
+
+Reads are BLASTed against database alleles extended by the read context
+around them (`--forward`, `--reverse`), which is trimmed off again
+afterwards.
+
+- **The context is per allele.** Each database allele gets the consensus of
+  the reads in which *it* is found.
+- **An allele found in no read takes the context of its gene**: the
+  consensus over all occurrences of the other alleles of that gene, so that
+  all alleles of a gene are searched alike. `--no-gene-context` turns this
+  off and leaves such alleles bare. The log says how many alleles had reads
+  of their own, how many borrowed, and how many stayed unextended (genes of
+  which no allele was seen).
+- **Consensus**: per position, outwards from the allele, while more than
+  half of the allele's occurrences agree.
+- **`--extension-maxdist N`** (default 0) decides which reads count as
+  occurrences. With 0, only reads containing the allele exactly. With
+  N > 0, a read that contains *no* allele exactly is assigned to the
+  allele(s) at the smallest edit distance, if that distance is at most N.
+  Reads with an exact allele are never reassigned. Use it when the database
+  is from another species or lacks the donors' alleles.
+
+The tolerant search is seeded (an allele cut into N + 1 pieces must share
+one piece exactly with any read within N edits) and verified with a banded
+alignment, so it costs little: on the 2800-read test library, with a
+database in which every allele carries four substitutions, no allele has an
+exact match and none is extended at tolerance 0; at tolerance 4, 21 of 23
+alleles are extended and discovery returns exactly the 53 donor–sequence
+pairs obtained with the library's own database. Run time is unchanged
+(0.8 s).
+
+## Comparison with immunediscover.jl
+
+!!! note
+    The comparison harness (`parity/`), the reference-value tests
+    (`tests/`) and `BUGS.md` mentioned below belong to the porting work
+    and are not part of this repository. The section is kept as a record
+    of how the port was checked.
+
+`parity/runall.sh` generates synthetic V, D and J plate libraries and runs
+73 scenarios covering every sub-command through both implementations.
+Reference environment: Julia 1.13.4, CSV.jl **0.10.15** (upstream HEAD does
+not run with CSV 1.x), DataFrames 1.8.3, BLAST 2.17.0, bwa 0.7.19.
+
+Since 0.2.0 fixes bugs, its output is *meant* to differ from Julia's. The
+check is therefore run per command: `runall.sh isolated` gives every Rust
+command the **Julia** intermediates as input (a fresh copy per scenario), so
+a difference can only come from that command itself.
+
+Result: **119 of 163 outputs byte-identical**; the other 44 are all
+accounted for by a fix:
+
+| Outputs | Difference | Fix |
+|---|---|---|
+| 12 × `search exact` tables, 1 raw table | column order; rows for the control gene; values of locus rows identical, except the frequency columns of the one `--top 5` scenario | D1, A5, counts |
+| 1 × `search exact --refgene` wide table | only the `ref_gene_count_*_ratio` columns | A5 |
+| 9 × `discover blast` tables, affixes, extended FASTA | affix consensus and what follows from it; `count`, `ratio`, `flank_index`; one row per allele (without extension: same rows, three more columns) | A10, A3, A4, edge, coverage, counts |
+| 6 × `discover blast` stdout | `makeblastdb` timestamps and paths | — |
+| 4 × co-occurrence edge tables | `p_value` only | A1 |
+| 2 × hierarchical cluster tables | same clusters, numbering (hash order upstream) | D3 |
+| 2 × `discover hsmm` | Julia crashes on integer wells; log-probabilities differ by ≤ 4.3e-16 relative | B2 |
+| `table transform`, `table fasta` (2), `fasta merge`, `fasta diff`, `search bwa` | `missing` text; names (and one export on which Julia crashes on empty cells); headers; listing order; soft clip | A12, A6, A7, D3, A2 |
+| `table collect` | none: the glob also picks up a file a later scenario wrote into the Julia directory | — |
+
+Against the planted truth of the test libraries, `discover blast -g V` went
+from 5 rows (2 of 16 planted novel alleles) to 53 rows, one per
+donor–allele pair (9 of 16), with no wrong sequence; `-g D` went from 27 of
+35 known pairs, 9 of 13 novel pairs and 12 calls that are not in the truth
+to 33, 13 and 0. BUGS.md has the full table.
+
+`tests/reference_values.rs` still checks 4000 affix trims, 4500
+dendrograms, 3000 flank extractions, 6000 border decisions and the
+hypergeometric tail against values produced by the Julia packages; the one
+place where a fix changes a reference value (flanks before the read start)
+is corrected inside the test and asserted to be exactly that case.
+
+To reproduce:
+
+```
+cargo build --release
+export JULIA="julia --project=/path/to/immunediscover.jl"
+parity/runall.sh jl          # Julia reference (slow)
+parity/runall.sh isolated    # every Rust command on the Julia intermediates
+parity/runall.sh rs          # the Rust pipeline end to end, then a full diff
+```
+
+See the header of `parity/runall.sh` for the environment variables.
+
+## Speed
+
+281 000 reads, 2 cores: demultiplex 3.9 s, exact search 1.1–1.4 s,
+heptamer 2.4 s, BLAST discovery 57 s (48 s of it inside `blastn`).

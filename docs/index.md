@@ -10,6 +10,10 @@ FASTQ of a plate ──demultiplex──▶ reads per donor ──┬─ search 
                                                     └─ discover blast ─▶ new alleles, with evidence
 ```
 
+!!! tip "New here?"
+    Start with [Getting started](getting-started.md): it runs the whole
+    analysis once, from the FASTQ of a plate to a list of new alleles.
+
 | Page | Read it when |
 |---|---|
 | [Getting started](getting-started.md) | you want to run the whole analysis once, from FASTQ to new alleles |
@@ -17,6 +21,7 @@ FASTQ of a plate ──demultiplex──▶ reads per donor ──┬─ search 
 | [Commands](commands.md) | you need an option or the meaning of an output column |
 | [`discover blast` in depth](discover-blast.md) | you are looking for new alleles and need to choose thresholds |
 | [Evidence](evidence.md) | you have a list of candidates and must decide which to believe |
+| [For developers](developers.md) | you want to change the code or check it against the Julia original |
 
 ## The commands at a glance
 

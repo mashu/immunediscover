@@ -55,9 +55,10 @@ behind the evidence (step 8).
 | `--min-corecov` | 0.6 | Minimum length of the found sequence relative to the database allele. Removes truncated sequences. |
 | `-t`, `--top` | 1 | How many versions of the surroundings to report per allele. 1 reports the best supported one. |
 
-The evidence columns do **not** remove anything. They are there so that
-you can set the count thresholds generously and judge the calls
-afterwards.
+!!! note
+    The evidence columns do **not** remove anything. They are there so
+    that you can set the count thresholds generously and judge the calls
+    afterwards.
 
 ## Presets for V, D and J
 

@@ -130,7 +130,8 @@ pub struct BlastArgs {
     /// Leave out the evidence columns (db_distance, copies, evidence,
     /// relation, donors, carriers, segregates, usual_parent_ratio). They
     /// describe how much of every reported sequence a donor holds and what
-    /// the other donors of the plate say about it; see docs/evidence.md.
+    /// the other donors of the plate say about it. Explained in the user
+    /// guide: https://mashu.github.io/immunediscover/evidence/
     #[arg(long = "no-evidence")]
     no_evidence: bool,
     /// Directory for BLAST cache, temporary query FASTA, combined/extended DB, and affix files
