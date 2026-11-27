@@ -25,18 +25,18 @@ FASTQ of a plate ──demultiplex──▶ reads per donor ──┬─ search 
 
 ## The commands at a glance
 
-| Command | Question it answers |
+| Command | What it does |
 |---|---|
-| `preprocess demultiplex` | Which reads belong to which donor? |
-| `search exact` | Which known alleles does each donor carry, and how strongly? |
-| `discover blast` | Which sequences resemble known alleles without being in the database? |
-| `discover hsmm` | Which D genes are in the reads, found by their recombination signals alone? |
-| `search heptamer` | Where does each V allele end, judged by the heptamer that follows it? |
-| `search bwa` | Do the candidates map to the right chromosome of the genome? |
-| `analyze haplotype` | Is each donor homozygous or heterozygous for each gene? |
-| `analyze cooccurrence` | Which alleles tend to be found in the same donors? |
-| `table ...` | Join, filter, sort and export tables without leaving the command line. |
-| `fasta ...` | Merge, compare and name FASTA files. |
+| `preprocess demultiplex` | Sorts the reads of a plate into donors. |
+| `search exact` | Reports the known alleles each donor carries and how many reads support them. |
+| `discover blast` | Finds sequences that resemble known alleles without being in the database. |
+| `discover hsmm` | Finds D genes by their recombination signals alone. |
+| `search heptamer` | Finds where each V allele ends from the heptamer that follows it. |
+| `search bwa` | Checks that candidates map to the expected chromosome of the genome. |
+| `analyze haplotype` | Calls each donor homozygous or heterozygous for each gene. |
+| `analyze cooccurrence` | Finds alleles that tend to occur in the same donors. |
+| `table ...` | Joins, filters, sorts and exports tables. |
+| `fasta ...` | Merges, compares and names FASTA files. |
 
 ## Words used in this guide
 

@@ -164,7 +164,7 @@ A check against the genome is available with
 [`search bwa`](commands.md#search-bwa): it keeps the candidates that map
 to the expected chromosome.
 
-## Common questions
+## Troubleshooting
 
 **A known allele of my donor is missing.** Look in
 `<output>.flank-split.tsv.gz`, then run with `-v` and search for it in
@@ -173,7 +173,7 @@ threshold removed it.
 
 **Too many new alleles.** Raise `-c` and `-f`, give `--pseudo`, and use
 the evidence columns: sequences with evidence 0, with `segregates` false,
-or many differences from the database are the first to question.
+or many differences from the database are the first to review.
 
 **Nothing is found with a database from another species.** No read
 contains a database allele exactly, so no surroundings are learned. Set

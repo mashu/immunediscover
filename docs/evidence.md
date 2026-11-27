@@ -1,4 +1,4 @@
-# Evidence: is this sequence really in this donor?
+# Evidence columns
 
 `discover blast` reports every sequence that passes the read-count
 thresholds. A count alone is hard to judge: 40 reads are a lot for a gene
@@ -7,20 +7,17 @@ gene that amplifies well in a deep donor. The evidence columns put every
 reported sequence on a common scale and say what the rest of the plate
 knows about it.
 
-They answer one question:
+## What they measure
 
-> Is this sequence present in this donor's DNA in a real amount, or is it
-> an artifact (a PCR or sequencing error, a chimera) of something else in
-> the well?
+The `evidence` column measures one thing: whether a sequence is present in
+a donor's DNA in a real amount, or is an artifact (a PCR or sequencing
+error, a chimera) of something else in the well.
 
-They do **not** answer a second question, which only a biologist can:
-
-> Is this real sequence an allele of the gene it was named after, or does
-> it come from another locus or a pseudogene?
-
-For the second question the table gives you the facts to decide with:
-the distance to the database, the number of donors, the number of copies
-and whether the sequence segregates.
+It does not establish which gene a real sequence belongs to. A sequence
+from another locus or a pseudogene is real DNA and gets strong evidence.
+The other columns are there for that decision: the distance to the
+database, the number of donors, the number of copies and whether the
+sequence segregates.
 
 ## The columns
 
@@ -28,7 +25,7 @@ and whether the sequence segregates.
 |---|---|
 | `db_distance` | Differences (substitutions, insertions, deletions) from the nearest database allele. 0 is a known allele. Most new alleles are 1 to 3 differences away; a sequence 5 or 10 away is more often another gene. |
 | `copies` | How many copies of the sequence the donor holds, estimated from the reads. About 1 for an allele on one chromosome, about 2 for an allele on both. Far below 1 for artifacts. Above 2 when the sequence sits in more than two places in the genome. |
-| `evidence` | How sure we can be that this is not an artifact. Read it as "1 in 10 to the power of evidence": **1** means about one in ten sequences like this one is an artifact, **2** one in a hundred, **3** one in a thousand. **0** means artifacts are as common as real sequences at this amount. Empty when the donor has too few reads of the gene to judge. |
+| `evidence` | How unlikely it is that the sequence is an artifact. Read it as "1 in 10 to the power of evidence": **1** means about one in ten sequences like this one is an artifact, **2** one in a hundred, **3** one in a thousand. **0** means artifacts are as common as real sequences at this amount. Empty when the donor has too few reads of the gene to judge. |
 | `relation` | What the sequence could be an artifact of, in this donor: `1 difference`, `2 differences`, `3 differences` or `4+ differences` from a more abundant sequence of the same gene, a `chimera` of two of them, or `top of gene` when nothing in the gene is more abundant. |
 | `donors` | Donors on the plate in which the sequence was seen at all, even as a single read. |
 | `carriers` | Donors on the plate holding at least a quarter of a copy of it. |
@@ -43,7 +40,7 @@ and whether the sequence segregates.
 | IGHV3-15*01_S5678 | 648 | 11 | 9.8 | 6.4 | top of gene | 95 | 95 | false |
 | IGHV2-26*02_S9012 | 19 | 1 | 0.33 | 0 | 1 difference | 2 | 1 | true |
 
-These values are made up to show the three typical cases.
+Example values for three typical cases.
 
 - **First row.** One copy, one difference from the database, evidence 2.4
   (fewer than one in a hundred such sequences is an artifact), carried by
@@ -59,7 +56,7 @@ These values are made up to show the three typical cases.
   per allele), but the reads cannot support it. Look for it in other
   plates.
 
-### A rule of thumb
+### Strength of evidence
 
 | evidence | meaning |
 |---|---|
@@ -75,11 +72,10 @@ These values are made up to show the three typical cases.
 
 ## How it is computed
 
-Yes, the evidence is model based. There are three small models, each
-fitted to the plate being analysed. Nothing is trained in advance and
-there are no reference data sets behind it. All sequences of the run are
-used, including those the count thresholds remove: they are what the
-artifacts of the plate look like.
+The evidence comes from three models, each fitted to the plate being
+analysed. Nothing is trained in advance and no reference data are used.
+All sequences of the run enter the fit, including those the count
+thresholds remove: they show what the artifacts of the plate look like.
 
 ### 1. From reads to copies
 
@@ -155,7 +151,7 @@ Safeguards:
 
 Some errors are not chance events: the same variant of the same parent
 sequence appears in most donors, at a low and steady ratio to the parent
-(a fraction of a percent on the plates seen so far). Its amount in one
+(typically a fraction of a percent). Its amount in one
 donor is then judged against **its own** usual ratio in the other donors.
 A donor that really carries the sequence holds a hundred times the usual
 ratio; a fluctuation holds two or three times.
@@ -184,24 +180,15 @@ This step can only lower the evidence.
   are reasons to read the other columns.
 - **Below a fifth of a copy it has nothing to say** (evidence 0).
 
-On three validation plates (95 donors each; V, D and J genes with alleles
-held out of the database), judged on the donor where each sequence is
-strongest: for J both held-out alleles had evidence above 2 and all four
-other calls had 0; for V 111 of 124 held-out alleles had evidence of 1 or
-more and three had 0; for D 7 of 9 had 1 or more. (Measured before the
-last adjustment to step 3, which was made for two of the alleles that had
-0.) The other calls that kept strong evidence in V and D were sequences
-present in most donors or many differences from the database, which is
-what the remaining columns are for.
-
 ## Switching it off
 
 `--no-evidence` leaves the eight columns out. The other columns of the
 output are identical with and without them.
 
-## For developers
+## In the source code
 
 `src/evidence/`: `amplification.rs` (copies), `parents.rs` and `kinds.rs`
 (relation), `plate.rs` (donors, carriers, segregation, usual ratio),
-`artifact_rate.rs` (step 2), `recurrence.rs` (step 3).
-`ki-check --evidence` evaluates the evidence against held-out alleles.
+`artifact_rate.rs` (step 2), `recurrence.rs` (step 3). The evidence can
+be checked against alleles held out of a database with
+`ki-check --evidence`, described under [For developers](developers.md).
