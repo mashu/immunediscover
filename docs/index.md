@@ -16,6 +16,7 @@ FASTQ of a plate ──demultiplex──▶ reads per donor ──┬─ search 
 
 | Page | Read it when |
 |---|---|
+| [Installing](install.md) | you do not have the program yet |
 | [Getting started](getting-started.md) | you want to run the whole analysis once, from FASTQ to new alleles |
 | [Input files](inputs.md) | you are preparing the files, or a command complains about a column |
 | [Commands](commands.md) | you need an option or the meaning of an output column |

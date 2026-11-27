@@ -18,13 +18,18 @@ use clap::{Parser, Subcommand};
 
 use crate::error::Result;
 
-/// Version reported by `--version` and recorded in the invocation log.
+/// Version recorded in the invocation log.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// What `--version` prints after the program name. The "(Rust)" tells this
+/// program apart from the Julia tool of the same name; the installer
+/// looks for it before it replaces an `immunediscover` already installed.
+const DISPLAYED_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (Rust)");
 
 #[derive(Debug, Parser)]
 #[command(
     name = "immunediscover",
-    version,
+    version = DISPLAYED_VERSION,
     about = "Tool for processing immune NGS data",
     after_help = "GKHLab",
     subcommand_required = true,
