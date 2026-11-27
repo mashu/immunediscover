@@ -499,6 +499,8 @@ fn the_builtin_aligner_discovers_the_same_alleles_without_blast() {
         ],
     );
     assert!(printed(&output).contains("Built-in aligner"));
+    // The time the alignment took and its speed are reported.
+    assert!(printed(&output).contains("reads per second"));
     // The presets are applied, but nothing of BLAST is used or reported.
     assert!(printed(&output).contains("Applying V preset length"));
     for word in ["blastn", "megablast", "preset args"] {
@@ -523,6 +525,42 @@ fn the_builtin_aligner_discovers_the_same_alleles_without_blast() {
     assert!(printed(&refused).contains("--args sets options of blastn"));
     let builtin = table(dir.path().join("builtin.tsv.gz"));
     check_discovery(&plate, &builtin);
+
+    // A stricter aligner gives the same alleles here, where every read is
+    // near one; its option belongs to the built-in aligner alone.
+    run(
+        dir.path(),
+        &[
+            "discover",
+            "blast",
+            "demux.tsv.gz",
+            "db.fasta",
+            "strict.tsv",
+            "-g",
+            "V",
+            "--aligner",
+            "builtin",
+            "--min-identity",
+            "0.9",
+        ],
+    );
+    let strict = table(dir.path().join("strict.tsv.gz"));
+    assert_eq!(discovered(&strict), discovered(&builtin));
+    let refused = Command::new(env!("CARGO_BIN_EXE_immunediscover"))
+        .args([
+            "discover",
+            "blast",
+            "demux.tsv.gz",
+            "db.fasta",
+            "refused.tsv",
+            "--min-identity",
+            "0.9",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert!(printed(&refused).contains("--min-identity is an option of the built-in aligner"));
 
     if !blastn_available() {
         eprintln!("comparison with BLAST skipped: blastn is not on the PATH");

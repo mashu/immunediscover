@@ -34,9 +34,10 @@ pub struct AlignArgs {
     /// Layout of the output
     #[arg(short = 'f', long = "format", value_enum, default_value_t = Format::Table)]
     format: Format,
-    /// Smallest share of equal bases between a read and its allele (0-1).
-    /// Reads that match no sequence this well are left out
-    #[arg(short = 'i', long = "min-identity", default_value_t = 0.8, value_parser = unit_interval)]
+    /// How near a read must be to an allele (0-1). 0.9 allows one
+    /// difference per ten bases of the allele. Reads further from every
+    /// allele are left out; lower values take longer
+    #[arg(short = 'i', long = "min-identity", default_value_t = 0.9, value_parser = unit_interval)]
     min_identity: f64,
     /// Smallest share of the allele that must lie inside the read (0-1).
     /// 1 keeps only reads that hold the allele from end to end

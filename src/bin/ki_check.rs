@@ -29,7 +29,9 @@ use immunediscover::check::evidence_report::{
 };
 use immunediscover::cli::presets::{resolve, resolve_blast_args, Preset, PresetValues, Resolved};
 use immunediscover::commands::discover::blast::flank_split::unfiltered_sidecar;
-use immunediscover::commands::discover::blast::{self, Aligner, BlastParams};
+use immunediscover::commands::discover::blast::{
+    self, Aligner, BlastParams, DEFAULT_BUILTIN_IDENTITY,
+};
 use immunediscover::error::{Error, Result};
 use immunediscover::evidence;
 
@@ -71,6 +73,11 @@ struct Args {
     /// instead of BLAST
     #[arg(long = "builtin-aligner")]
     builtin_aligner: bool,
+
+    /// With --builtin-aligner: how near a read must be to an allele to be
+    /// given to it (0-1); see `discover blast --min-identity`
+    #[arg(long = "min-identity", default_value_t = DEFAULT_BUILTIN_IDENTITY)]
+    min_identity: f64,
 
     /// Work directory for discover blast intermediates
     #[arg(long = "work-dir", default_value = "blast")]
@@ -388,7 +395,9 @@ fn run_discover(paths: &GenePaths, args: &Args) -> Result<()> {
         min_length: resolved.length,
         edge: resolved.edge,
         aligner: if args.builtin_aligner {
-            Aligner::Builtin
+            Aligner::Builtin {
+                min_identity: args.min_identity,
+            }
         } else {
             Aligner::Blast {
                 args: resolve_blast_args(Some(preset_of(paths.kind)), None),

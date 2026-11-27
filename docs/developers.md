@@ -268,15 +268,34 @@ See the header of `parity/runall.sh` for the environment variables.
 
 ## The built-in aligner
 
-`align/gotoh.rs` aligns a subject from end to end inside a read (free
-read ends, affine gaps), in a band of diagonals. Its scores are tested
-against the unbanded Needleman-Wunsch of `align/needleman_wunsch.rs` on
-random sequences. `align/search.rs` chooses the subjects to align from
-shared 10-mers and is tested against aligning every subject in whole.
-A subject is skipped only when its shared words prove that it cannot
-reach the identity of the best alignment so far: with every `step`-th
-word of the read looked up, one difference removes at most
-`ceil(10 / step)` shared words.
+`align/search.rs` finds the nearest subject of a read: fewest
+differences per base, bases beyond the read end weighted
+`matched / (matched - mismatched)`. It needs no alignment for that:
+
+- An Aho-Corasick automaton over all subjects and their reverse
+  complements names the reads that hold a subject unchanged in one pass
+  (`unchanged_subject`); nothing else is done for them.
+- `align/seeds.rs`: 10-mer index over groups of subjects of one length
+  within 8 mismatches of the first member; votes per group and diagonal,
+  and the spread of voted diagonals (a read with an inserted or deleted
+  stretch votes on two). A group is passed over only when its votes prove
+  it too far: with every `step`-th word of the read looked up, one
+  difference removes at most `ceil(10 / step)` shared words. A read
+  whose best group shares less than half the words of an unchanged
+  subject is voted again with every word.
+- `align/edits.rs`: mismatch count with cutoff, and the least number of
+  differences by furthest-reaching diagonals (Landau-Vishkin), with a
+  limit and with subject bases allowed to hang over the read ends. The
+  first member of a group is counted with `limit + radius`; if that
+  fails, no member is within `limit`.
+- `align/gotoh.rs`: banded affine-gap alignment of a subject inside a
+  read (free read ends, optional overhang), run once for the nearest
+  subject. Its scores are tested against the unbanded Needleman-Wunsch
+  of `align/needleman_wunsch.rs`.
+
+The search is tested against a plain dynamic programme over every
+subject and both strands (`the_nearest_allele_is_the_one_the_plain_
+programme_finds`; `IMMUNEDISCOVER_STRESS=50000` runs it longer).
 
 `discover blast --aligner builtin` turns the hits into the columns BLAST
 would give (`assign::builtin_best_hits`), so that everything after the
@@ -288,14 +307,20 @@ assignment is the same code for both aligners. `ki-check
 281 000 reads, 2 cores: demultiplex 3.9 s, exact search 1.1–1.4 s,
 heptamer 2.4 s, BLAST discovery 57 s (48 s of it inside `blastn`).
 
-Assignment of reads on simulated plates, 2 cores, same discovery result
-with both aligners:
+Assignment of reads in `discover blast`, 2 cores. In all three rows the
+discovery result is the same table with both aligners (the D plate apart
+from read counts, which are higher with the built-in aligner: BLAST cuts
+some matches short of the required length).
 
 | Plate | Reads | `blastn` | Built-in aligner |
 |---|---|---|---|
-| V: 63 genes in 7 families, 256 alleles, 35 new alleles in 48 donors | 151 200 | 44 s | 13 s |
-| D: 25 genes of 11 to 37 bases, 20 new alleles in 48 donors | 96 000 | 187 s | 2.2 s |
+| V, invented genes: 63 genes in 7 families, 256 alleles | 151 200 | 44 s | 4.0 s |
+| D, invented genes: 25 genes of 11 to 37 bases | 96 000 | 187 s | 0.4 s |
+| V, the human IGHV set enlarged to 1 300 alleles, a fifth of the reads 12 to 30 % away from every allele | 100 000 | 350 s | 91 s |
 
-Reads far from every allele cost the built-in aligner about ten times
-more than reads of a known gene, because few candidates can be ruled out
-by their shared words.
+Reads that hold an allele unchanged are named at about 250 000 per
+second and core. Reads near an allele cost little. Reads far from every
+allele cost most, because every group that shares words with them is
+counted up to the limit of 30 % differences: they are the 91 s of the
+last row. `discover blast --min-identity` (default 0.7) sets that limit;
+with 0.9 the last row takes 38 s, with the same table.

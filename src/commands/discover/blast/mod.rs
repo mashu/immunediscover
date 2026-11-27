@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use rayon::prelude::*;
 
 use self::affixes::ExtensionSettings;
-pub use self::assign::{Aligner, AssignSettings};
+pub use self::assign::{Aligner, AssignSettings, DEFAULT_BUILTIN_IDENTITY};
 use self::trim::{trim_and_align, AlignmentStats};
 use self::workdir::{content_digest, file_identity, Fingerprint, RunLock, WorkLayout};
 use crate::commands::variants::{
