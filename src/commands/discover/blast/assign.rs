@@ -20,12 +20,15 @@ use crate::seq::search::find_first;
 use crate::{info, warn};
 
 /// The program that compares reads with the database.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Aligner {
     /// NCBI `blastn`, which must be installed, with extra arguments for it.
     Blast { args: String },
     /// The aligner that is part of this program ([`crate::align::search`]).
-    Builtin,
+    /// A read is matched to a database sequence with at most
+    /// `1 - min_identity` differences per base; reads further from every
+    /// sequence are left out.
+    Builtin { min_identity: f64 },
 }
 
 impl Aligner {
@@ -33,7 +36,7 @@ impl Aligner {
     pub fn label(&self) -> &'static str {
         match self {
             Aligner::Blast { .. } => "BLAST",
-            Aligner::Builtin => "the built-in aligner",
+            Aligner::Builtin { .. } => "the built-in aligner",
         }
     }
 }
@@ -142,11 +145,10 @@ fn oriented_segment(segment: &str, read: &str, minus_strand: bool) -> Option<(St
     Some((segment.to_string(), before, after))
 }
 
-/// The built-in aligner matches a read to a database sequence with at
-/// most `1 - BUILTIN_MIN_IDENTITY` differences per base. Low on purpose:
-/// no read that resembles an allele is given up here; the thresholds of
-/// the later steps decide what is reported.
-const BUILTIN_MIN_IDENTITY: f64 = 0.7;
+/// The identity the built-in aligner asks for unless told otherwise. Low
+/// on purpose: no read that resembles an allele is given up; the
+/// thresholds of the later steps decide what is reported.
+pub const DEFAULT_BUILTIN_IDENTITY: f64 = 0.7;
 
 /// Best BLAST hit of every read: run `blastn` (or reuse its cached result)
 /// and keep the best row per read. Columns as in [`COLUMNS`].
@@ -229,22 +231,24 @@ fn blast_best_hits(
 fn builtin_best_hits(
     reads: &Frame,
     database_fasta: &Path,
+    min_identity: f64,
     settings: &AssignSettings,
 ) -> Result<Frame> {
     let database = load_database(database_fasta)?;
     let names = text_cells(reads, "name")?;
     let sequences = text_cells(reads, "genomic_sequence")?;
     let search = Settings {
-        min_identity: BUILTIN_MIN_IDENTITY,
+        min_identity,
         min_coverage: settings.min_subject_coverage,
         ..Settings::default()
     };
     let texts: Vec<&str> = sequences.iter().map(String::as_str).collect();
     info!(
-        "Built-in aligner: {} reads against {} sequences ({} groups of nearly equal sequences)",
+        "Built-in aligner: {} reads against {} sequences ({} groups of nearly equal sequences); a read may differ from its allele in up to {:.0}% of the bases",
         with_thousands(texts.len()),
         with_thousands(database.subjects().len()),
-        with_thousands(database.groups())
+        with_thousands(database.groups()),
+        100.0 * (1.0 - min_identity)
     );
     let hits = database.search(&texts, &search);
     info!(
@@ -370,7 +374,9 @@ pub fn blast_discover(
         Aligner::Blast { args } => {
             blast_best_hits(input_tsv, &reads, database_fasta, layout, args, settings)?
         }
-        Aligner::Builtin => builtin_best_hits(&reads, database_fasta, settings)?,
+        Aligner::Builtin { min_identity } => {
+            builtin_best_hits(&reads, database_fasta, *min_identity, settings)?
+        }
     };
 
     // Attach read information.

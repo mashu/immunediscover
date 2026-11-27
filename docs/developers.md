@@ -322,4 +322,5 @@ Reads that hold an allele unchanged are named at about 250 000 per
 second and core. Reads near an allele cost little. Reads far from every
 allele cost most, because every group that shares words with them is
 counted up to the limit of 30 % differences: they are the 91 s of the
-last row. With `align --min-identity 0.9` the same reads take 20 s.
+last row. `discover blast --min-identity` (default 0.7) sets that limit;
+with 0.9 the last row takes 38 s, with the same table.

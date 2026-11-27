@@ -121,6 +121,7 @@ with `--aligner builtin`.
 | `-e`, `--edge` | 0 | Minimum bases between the allele and the end of the read. Removes alleles cut off by the read end. |
 | `--aligner` | `blast` | Which program compares the reads with the alleles: `blast` (NCBI BLAST+, which must be installed) or `builtin` (part of immunediscover, nothing else needed). |
 | `-a`, `--args` | megablast settings | Extra settings passed to `blastn`. Change only if you know BLAST. Not allowed with `--aligner builtin`. |
+| `--min-identity` | 0.7 | Only with `--aligner builtin`: how near a read must be to an allele (with its surroundings) to be given to it. 0.7 allows three differences per ten bases, so no read that resembles an allele is left out. Reads further from every allele get no allele. Raising it (for example to 0.9, one difference per ten bases) saves time on plates with many reads that belong to no gene of the database. |
 | `-i`, `--isin` | off | A found sequence that is a piece of a known allele normally takes that allele's name. With `-i` it is reported as new. |
 | `-g`, `--gene` | none | Preset for `V`, `D` or `J`. |
 | `-G`, `--show-presets` | | Print the presets and stop. |
@@ -154,6 +155,20 @@ read is set aside at this step because it is far from the database: a
 read is left without an allele only if it differs from every allele in
 more than three of ten bases. What is reported is decided afterwards, by
 `--maxdist` and the other thresholds.
+
+Reads far from every allele take the most time, because each is compared
+with every allele it shares anything with. If a plate holds many of them
+and the run is slow, `--min-identity` sets how far a read is followed:
+
+```
+immunediscover discover blast demux.tsv.gz IGHV.fasta novel.tsv -g V --aligner builtin --min-identity 0.9
+```
+
+With 0.9 a read more than one difference in ten bases away from every
+allele (counted over the allele and its recorded surroundings) gets no
+allele. Keep it well below what `--maxdist` asks for: with the V preset
+(14 differences in an allele of about 300 bases, plus differences in the
+40 bases around it) 0.9 leaves room; 0.97 would not.
 
 ## The output table
 

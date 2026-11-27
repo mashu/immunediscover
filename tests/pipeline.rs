@@ -526,6 +526,42 @@ fn the_builtin_aligner_discovers_the_same_alleles_without_blast() {
     let builtin = table(dir.path().join("builtin.tsv.gz"));
     check_discovery(&plate, &builtin);
 
+    // A stricter aligner gives the same alleles here, where every read is
+    // near one; its option belongs to the built-in aligner alone.
+    run(
+        dir.path(),
+        &[
+            "discover",
+            "blast",
+            "demux.tsv.gz",
+            "db.fasta",
+            "strict.tsv",
+            "-g",
+            "V",
+            "--aligner",
+            "builtin",
+            "--min-identity",
+            "0.9",
+        ],
+    );
+    let strict = table(dir.path().join("strict.tsv.gz"));
+    assert_eq!(discovered(&strict), discovered(&builtin));
+    let refused = Command::new(env!("CARGO_BIN_EXE_immunediscover"))
+        .args([
+            "discover",
+            "blast",
+            "demux.tsv.gz",
+            "db.fasta",
+            "refused.tsv",
+            "--min-identity",
+            "0.9",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert!(printed(&refused).contains("--min-identity is an option of the built-in aligner"));
+
     if !blastn_available() {
         eprintln!("comparison with BLAST skipped: blastn is not on the PATH");
         return;

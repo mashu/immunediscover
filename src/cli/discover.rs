@@ -9,7 +9,7 @@ use crate::error::Error;
 use super::presets::{describe_presets, resolve, resolve_blast_args, Preset, PresetValues};
 use super::validators::{at_least_one, positive_size, unit_interval};
 use crate::commands::discover::blast::workdir::DEFAULT_WORK_DIR;
-use crate::commands::discover::blast::{self, Aligner, BlastParams};
+use crate::commands::discover::blast::{self, Aligner, BlastParams, DEFAULT_BUILTIN_IDENTITY};
 use crate::commands::discover::hsmm::{self, HsmmParams};
 use crate::error::Result;
 use crate::info;
@@ -94,6 +94,14 @@ pub struct BlastArgs {
     /// for the settings of blastn itself (--args)
     #[arg(long = "aligner", value_enum, default_value_t = AlignerChoice::Blast)]
     aligner: AlignerChoice,
+    /// With --aligner builtin: how near a read must be to an allele (with
+    /// its surroundings) to be given to it (0-1). 0.7 allows three
+    /// differences per ten bases, so that no read resembling an allele is
+    /// left out. Reads further from every allele get no allele. Raise it
+    /// (for example to 0.9) to save time on plates with many reads that
+    /// belong to no gene of the database [default: 0.7]
+    #[arg(long = "min-identity", value_parser = unit_interval)]
+    min_identity: Option<f64>,
     /// Search again instead of reusing the BLAST results of an earlier run
     #[arg(short = 'o', long = "overwrite")]
     overwrite: bool,
@@ -179,6 +187,11 @@ impl BlastArgs {
                 "--args sets options of blastn and cannot be combined with --aligner builtin",
             ));
         }
+        if self.aligner == AlignerChoice::Blast && self.min_identity.is_some() {
+            return Err(Error::invalid(
+                "--min-identity is an option of the built-in aligner; add --aligner builtin, or use --args for BLAST",
+            ));
+        }
         let resolved = resolve(
             self.gene,
             PresetValues {
@@ -200,7 +213,9 @@ impl BlastArgs {
             AlignerChoice::Blast => Aligner::Blast {
                 args: resolve_blast_args(self.gene, self.args),
             },
-            AlignerChoice::Builtin => Aligner::Builtin,
+            AlignerChoice::Builtin => Aligner::Builtin {
+                min_identity: self.min_identity.unwrap_or(DEFAULT_BUILTIN_IDENTITY),
+            },
         };
         let params = BlastParams {
             input: positional(self.input, "INPUT")?,
