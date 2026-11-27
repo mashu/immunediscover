@@ -24,8 +24,10 @@ immunediscover discover blast demux.tsv.gz IGHV.fasta novel.tsv -g V
    then compared with "allele plus surroundings". This anchors both ends
    of the allele, so that a read is not mistaken for a shorter or longer
    allele.
-2. **Assigns every read to its most similar allele** with BLAST. Reads
-   that resemble a pseudogene more (if you give `--pseudo`) are dropped.
+2. **Assigns every read to its most similar allele**, with BLAST or with
+   the aligner built into the program (`--aligner`, see
+   [Search](#search)). Reads that resemble a pseudogene more (if you give
+   `--pseudo`) are dropped.
 3. **Groups identical reads** within each donor. The number of reads in a
    group is its `full_count`.
 4. **Cuts the surroundings off again**, leaving the allele-sized sequence
@@ -111,10 +113,32 @@ BLAST search; the D preset also changes the BLAST settings (`--args`).
 |---|---|---|
 | `-s`, `--subjectcov` | 0.1 | Minimum share of the database allele that the read must cover. |
 | `-e`, `--edge` | 0 | Minimum bases between the allele and the end of the read. Removes alleles cut off by the read end. |
-| `-a`, `--args` | megablast settings | Extra settings passed to `blastn`. Change only if you know BLAST. |
+| `--aligner` | `blast` | Which program compares the reads with the alleles: `blast` (NCBI BLAST+, which must be installed) or `builtin` (part of immunediscover, nothing else needed). |
+| `-a`, `--args` | megablast settings | Extra settings passed to `blastn`. Change only if you know BLAST. Not used with `--aligner builtin`. |
 | `-i`, `--isin` | off | A found sequence that is a piece of a known allele normally takes that allele's name. With `-i` it is reported as new. |
 | `-g`, `--gene` | none | Preset for `V`, `D` or `J`. |
 | `-G`, `--show-presets` | | Print the presets and stop. |
+
+#### BLAST or the built-in aligner
+
+```
+immunediscover discover blast demux.tsv.gz IGHV.fasta novel.tsv -g V --aligner builtin
+```
+
+Both programs answer the same question, which allele a read resembles
+most, and everything after that step is the same. They differ in how they
+treat the ends of an allele. BLAST reports the stretch where read and
+allele agree best and may stop a few bases before the end when the last
+bases differ. The built-in aligner always compares the allele, with its
+recorded surroundings, from the first to the last base, so a difference
+at the very end of an allele is counted and the sequence is reported at
+full length. This matters most when few or no surrounding bases are
+recorded (`--forward 0 --reverse 0`) and for short genes.
+
+The built-in aligner needs no installation, gives the same result on
+every computer, and is faster, most of all for D genes. Its results are
+not cached: every run aligns again. [The built-in aligner](align.md)
+describes how it works.
 
 ## The output table
 
@@ -181,7 +205,12 @@ contains a database allele exactly, so no surroundings are learned. Set
 
 **The second run is not faster / uses old results.** The cache is in
 `--work-dir`. It is reused only when reads, database and surroundings
-settings are unchanged; `-o` forces a new search.
+settings are unchanged; `-o` forces a new search. Only BLAST results are
+cached; with `--aligner builtin` every run aligns again.
+
+**"blastn command not found".** Install BLAST+ (see
+[Installing](install.md#what-else-is-needed)), or run with
+`--aligner builtin`, which does not need it.
 
 **"Another discover blast run is working on the same reads and
 database".** Every combination of reads, database and pseudogenes has its

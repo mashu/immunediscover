@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use rayon::prelude::*;
 
 use self::affixes::ExtensionSettings;
-pub use self::assign::AssignSettings;
+pub use self::assign::{Aligner, AssignSettings};
 use self::trim::{trim_and_align, AlignmentStats};
 use self::workdir::{content_digest, file_identity, Fingerprint, RunLock, WorkLayout};
 use crate::commands::variants::{
@@ -54,6 +54,8 @@ pub struct BlastParams {
     pub min_length: usize,
     pub edge: i64,
     pub blast_args: String,
+    /// Which program compares the reads with the database.
+    pub aligner: Aligner,
     pub overwrite: bool,
     pub forward_extension: usize,
     pub reverse_extension: usize,
@@ -348,7 +350,13 @@ fn allele_names(
 
 /// Run the command.
 pub fn run(params: &BlastParams) -> Result<()> {
-    info!("Discovery with BLAST assignments");
+    info!(
+        "Discovery with read assignment by {}",
+        match params.aligner {
+            Aligner::Blast => "BLAST",
+            Aligner::Builtin => "the built-in aligner",
+        }
+    );
     let work_dir = workdir::resolve_work_dir(&params.work_dir)?;
     std::fs::create_dir_all(&work_dir).map_err(|e| Error::io(&work_dir, e))?;
     info!(
@@ -433,6 +441,7 @@ pub fn run(params: &BlastParams) -> Result<()> {
         blast_fasta,
         &layout,
         &AssignSettings {
+            aligner: params.aligner,
             max_distance: params.max_distance,
             min_edge: params.edge,
             min_subject_coverage: params.subject_coverage,

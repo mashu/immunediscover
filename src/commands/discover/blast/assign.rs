@@ -4,9 +4,12 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
+use std::time::Instant;
 
 use super::runner::{blastn, ensure_blast_db, verify_blastn_version, COLUMNS};
 use super::workdir::{content_digest, file_identity, replace_extension, Fingerprint, WorkLayout};
+use crate::align::search::{Hit, Settings};
+use crate::commands::align::{bit_score, e_value, load_database};
 use crate::error::{Error, Result};
 use crate::frame::{Column, Frame, Value};
 use crate::io::compress;
@@ -16,9 +19,19 @@ use crate::seq::gene_of;
 use crate::seq::search::find_first;
 use crate::{info, warn};
 
+/// The program that compares reads with the database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Aligner {
+    /// NCBI `blastn`, which must be installed.
+    Blast,
+    /// The aligner that is part of this program ([`crate::align::search`]).
+    Builtin,
+}
+
 /// Thresholds of the assignment step.
 #[derive(Debug, Clone)]
 pub struct AssignSettings {
+    pub aligner: Aligner,
     /// Maximum BLAST mismatches of a cluster.
     pub max_distance: i64,
     /// Minimum distance of the aligned segment from both read ends.
@@ -121,32 +134,20 @@ fn oriented_segment(segment: &str, read: &str, minus_strand: bool) -> Option<(St
     Some((segment.to_string(), before, after))
 }
 
-/// Run (or reuse) BLAST and build clusters of identical aligned segments
-/// per well, donor and subject allele.
-///
-/// Returns columns `well`, `case`, `sseqid`, `qseq`, `mismatch`,
-/// `full_count`, `gene`, `full_ratio`, sorted by well, case and subject.
-pub fn blast_discover(
+/// Smallest share of equal bases at which the built-in aligner reports a
+/// match. Low on purpose: `--maxdist` decides later what is too far.
+const BUILTIN_MIN_IDENTITY: f64 = 0.7;
+
+/// Best BLAST hit of every read: run `blastn` (or reuse its cached result)
+/// and keep the best row per read. Columns as in [`COLUMNS`].
+fn blast_best_hits(
     input_tsv: &Path,
-    all_reads: &Frame,
+    reads: &Frame,
     database_fasta: &Path,
     layout: &WorkLayout,
     settings: &AssignSettings,
 ) -> Result<Frame> {
     verify_blastn_version()?;
-    layout.create_directories()?;
-
-    info!(
-        "Read {} rows from {} before BLAST assignment",
-        all_reads.nrows(),
-        input_tsv.display()
-    );
-    let reads = all_reads.unique_by(&["name"])?;
-    info!("Unique reads: {}", reads.nrows());
-    if reads.nrows() != all_reads.nrows() {
-        warn!("Duplicated names found in input. Using unique ones but this is likely user error!");
-    }
-
     // The cached hits depend on the reads, the database and the arguments.
     let fingerprint = Fingerprint::of(&[
         file_identity(input_tsv)?,
@@ -183,7 +184,7 @@ pub fn blast_discover(
         }
         // The reads are written out only when BLAST is going to read them,
         // and the result takes its place only once it is complete.
-        write_query_fasta(&layout.query_fasta, &reads)?;
+        write_query_fasta(&layout.query_fasta, reads)?;
         let partial = layout.run_dir.join("hits.partial.blast.gz");
         let searched = blastn(
             &layout.query_fasta,
@@ -208,9 +209,157 @@ pub fn blast_discover(
             "No BLASTn results found (wrong BLAST parameters?). Cannot proceed.",
         ));
     }
-
     let best = hits.take(&best_hits(&hits)?);
     info!("BLASTn results after best hits: {} rows", best.nrows());
+    Ok(best)
+}
+
+/// Best match of every read according to the built-in aligner, in the
+/// columns BLAST would give ([`COLUMNS`]).
+///
+/// The whole database sequence (allele plus recorded surroundings) is
+/// aligned inside the read, so `qseq` reaches from its first to its last
+/// base unless the read ends before.
+fn builtin_best_hits(
+    reads: &Frame,
+    database_fasta: &Path,
+    settings: &AssignSettings,
+) -> Result<Frame> {
+    let database = load_database(database_fasta)?;
+    let names = text_cells(reads, "name")?;
+    let sequences = text_cells(reads, "genomic_sequence")?;
+    let search = Settings {
+        min_identity: BUILTIN_MIN_IDENTITY,
+        min_coverage: settings.min_subject_coverage,
+        ..Settings::default()
+    };
+    let started = Instant::now();
+    let texts: Vec<&str> = sequences.iter().map(String::as_str).collect();
+    let hits = database.search(&texts, &search);
+    info!(
+        "Built-in aligner: {} of {} reads matched ({} distinct read sequences, {:.1} seconds)",
+        hits.matched(),
+        hits.len(),
+        hits.distinct(),
+        started.elapsed().as_secs_f64()
+    );
+    if hits.matched() == 0 {
+        return Err(Error::invalid(
+            "No read matches a database sequence. Cannot proceed.",
+        ));
+    }
+    let database_length: usize = database.subjects().iter().map(|s| s.sequence.len()).sum();
+    let matched: Vec<(usize, &Hit)> = (0..hits.len())
+        .filter_map(|read| hits.get(read).map(|hit| (read, hit)))
+        .collect();
+    let subject = |hit: &Hit| database.subject(hit.subject);
+    let ints = |value: &dyn Fn(usize, &Hit) -> usize| {
+        Column::from_ints(matched.iter().map(|&(read, hit)| value(read, hit) as i64))
+    };
+    let floats = |value: &dyn Fn(usize, &Hit) -> f64| {
+        Column::from_floats(matched.iter().map(|&(read, hit)| value(read, hit)))
+    };
+    let read_coverage = |_: usize, hit: &Hit| {
+        let (start, end) = hit.read_range();
+        (100.0 * (end - start) as f64 / hit.read_length as f64).round()
+    };
+    Frame::from_columns([
+        (
+            "qseqid",
+            Column::from_strings(matched.iter().map(|&(read, _)| names[read].as_str())),
+        ),
+        (
+            "sseqid",
+            Column::from_strings(matched.iter().map(|&(_, hit)| subject(hit).name.as_str())),
+        ),
+        ("pident", floats(&|_, hit| 100.0 * hit.identity())),
+        ("nident", ints(&|_, hit| hit.path.matches())),
+        ("length", ints(&|_, hit| hit.path.columns())),
+        ("mismatch", ints(&|_, hit| hit.path.mismatches())),
+        ("gapopen", ints(&|_, hit| hit.path.gap_openings())),
+        ("qcovs", floats(&read_coverage)),
+        ("qcovhsp", floats(&read_coverage)),
+        ("qstart", ints(&|_, hit| hit.read_range().0 + 1)),
+        ("qend", ints(&|_, hit| hit.read_range().1)),
+        // On the other strand BLAST counts the subject positions downwards.
+        (
+            "sstart",
+            ints(&|_, hit| {
+                if hit.minus_strand {
+                    hit.path.subject_end
+                } else {
+                    hit.path.subject_start + 1
+                }
+            }),
+        ),
+        (
+            "send",
+            ints(&|_, hit| {
+                if hit.minus_strand {
+                    hit.path.subject_start + 1
+                } else {
+                    hit.path.subject_end
+                }
+            }),
+        ),
+        ("qlen", ints(&|_, hit| hit.read_length)),
+        ("slen", ints(&|_, hit| subject(hit).sequence.len())),
+        (
+            "evalue",
+            floats(&|_, hit| e_value(hit.path.score, hit.read_length, database_length)),
+        ),
+        ("bitscore", floats(&|_, hit| bit_score(hit.path.score))),
+        (
+            "sstrand",
+            Column::from_strings(matched.iter().map(|&(_, hit)| {
+                if hit.minus_strand {
+                    "minus"
+                } else {
+                    "plus"
+                }
+            })),
+        ),
+        (
+            "qseq",
+            Column::from_strings(
+                matched
+                    .iter()
+                    .map(|&(read, hit)| hit.gapped_read(&sequences[read])),
+            ),
+        ),
+    ])
+}
+
+/// Assign every read to a database sequence (with BLAST or the built-in
+/// aligner) and build clusters of identical aligned segments per well,
+/// donor and subject allele.
+///
+/// Returns columns `well`, `case`, `sseqid`, `qseq`, `mismatch`,
+/// `full_count`, `gene`, `full_ratio`, sorted by well, case and subject.
+pub fn blast_discover(
+    input_tsv: &Path,
+    all_reads: &Frame,
+    database_fasta: &Path,
+    layout: &WorkLayout,
+    settings: &AssignSettings,
+) -> Result<Frame> {
+    layout.create_directories()?;
+
+    info!(
+        "Read {} rows from {} before assignment",
+        all_reads.nrows(),
+        input_tsv.display()
+    );
+    let reads = all_reads.unique_by(&["name"])?;
+    info!("Unique reads: {}", reads.nrows());
+    if reads.nrows() != all_reads.nrows() {
+        warn!("Duplicated names found in input. Using unique ones but this is likely user error!");
+    }
+
+    let best = match settings.aligner {
+        Aligner::Blast => blast_best_hits(input_tsv, &reads, database_fasta, layout, settings)?,
+        Aligner::Builtin => builtin_best_hits(&reads, database_fasta, settings)?,
+    };
 
     // Attach read information.
     let read_row: HashMap<String, usize> = text_cells(&reads, "name")?
@@ -223,7 +372,7 @@ pub fn blast_discover(
         .map(|id| {
             read_row.get(id).copied().ok_or_else(|| {
                 Error::invalid(format!(
-                    "BLAST hit for unknown read '{id}'; stale cache? Re-run with --overwrite"
+                    "Hit for unknown read '{id}'; stale cache? Re-run with --overwrite"
                 ))
             })
         })
@@ -241,7 +390,7 @@ pub fn blast_discover(
         .map(|((segment, &row), strand)| {
             oriented_segment(segment, &sequences[row], strand == "minus").ok_or_else(|| {
                 Error::invalid(
-                    "A BLAST query segment was not found in its read; stale cache? Re-run with --overwrite",
+                    "An aligned read segment was not found in its read; stale cache? Re-run with --overwrite",
                 )
             })
         })

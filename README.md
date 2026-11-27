@@ -21,5 +21,5 @@ immunediscover search exact   demux.tsv.gz IGHV.fasta exact.tsv -g V
 immunediscover discover blast demux.tsv.gz IGHV.fasta novel.tsv -g V
 ```
 
-`discover blast` needs BLAST+ (`blastn`, `makeblastdb`) on the `PATH`;
-`search bwa` needs `bwa`.
+`discover blast` needs BLAST+ (`blastn`, `makeblastdb`) on the `PATH`, or
+`--aligner builtin`; `search bwa` needs `bwa`.

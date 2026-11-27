@@ -241,11 +241,13 @@ if have blastn && have makeblastdb; then
             say "  BLAST+ found, but its version could not be read. 'discover blast' needs 2.15.0 to 2.17.0." ;;
         *)
             say "  BLAST+ $blast_version found, but 'discover blast' needs 2.15.0 to 2.17.0."
-            say "      To get a suitable one: $CONDA_HINT blast=2.16" ;;
+            say "      To get a suitable one: $CONDA_HINT blast=2.16"
+            say "      Or run it without BLAST: discover blast --aligner builtin" ;;
     esac
 else
     say "  BLAST+ not found (blastn, makeblastdb). 'discover blast' needs version 2.15.0 to 2.17.0."
     say "      To get it: $CONDA_HINT blast=2.16"
+    say "      Or run it without BLAST: discover blast --aligner builtin"
 fi
 if have bwa; then
     say "  bwa found: 'search bwa' is ready."

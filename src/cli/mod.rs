@@ -4,6 +4,7 @@
 //! Each argument struct only translates the command line into the plain
 //! parameter struct of the corresponding [`crate::commands`] module.
 
+mod align;
 mod analyze;
 mod discover;
 mod fasta;
@@ -48,6 +49,8 @@ enum Command {
     /// Search against known references (exact, heptamer, bwa)
     #[command(subcommand)]
     Search(search::SearchCommand),
+    /// Find the best matching allele of every read, without BLAST
+    Align(align::AlignArgs),
     /// Downstream analysis (cooccurrence, haplotype)
     #[command(subcommand)]
     Analyze(analyze::AnalyzeCommand),
@@ -68,6 +71,7 @@ impl Cli {
         match self.command {
             Command::Discover(command) => command.run(),
             Command::Search(command) => command.run(),
+            Command::Align(args) => args.run(),
             Command::Analyze(command) => command.run(),
             Command::Preprocess(command) => command.run(),
             Command::Table(command) => command.run(),

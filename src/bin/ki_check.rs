@@ -29,7 +29,7 @@ use immunediscover::check::evidence_report::{
 };
 use immunediscover::cli::presets::{resolve, Preset, PresetValues, Resolved};
 use immunediscover::commands::discover::blast::flank_split::unfiltered_sidecar;
-use immunediscover::commands::discover::blast::{self, BlastParams};
+use immunediscover::commands::discover::blast::{self, Aligner, BlastParams};
 use immunediscover::error::{Error, Result};
 use immunediscover::evidence;
 
@@ -66,6 +66,11 @@ struct Args {
     /// Fail when false-positive rate (%) exceeds this (omit to never fail on FP)
     #[arg(long = "max-fp-rate")]
     max_fp_rate: Option<f64>,
+
+    /// Compare reads and alleles with the aligner built into immunediscover
+    /// instead of BLAST
+    #[arg(long = "builtin-aligner")]
+    builtin_aligner: bool,
 
     /// Work directory for discover blast intermediates
     #[arg(long = "work-dir", default_value = "blast")]
@@ -387,6 +392,11 @@ fn run_discover(paths: &GenePaths, args: &Args) -> Result<()> {
         min_length: resolved.length,
         edge: resolved.edge,
         blast_args: resolved.blast_args,
+        aligner: if args.builtin_aligner {
+            Aligner::Builtin
+        } else {
+            Aligner::Blast
+        },
         overwrite: args.overwrite,
         forward_extension: resolved.forward,
         reverse_extension: resolved.reverse,

@@ -37,6 +37,7 @@ nav:
   - Finding new alleles:
       - discover blast: discover-blast.md
       - Evidence columns: evidence.md
+  - The built-in aligner: align.md
   - All commands: commands.md
   - For developers: developers.md
 
