@@ -348,25 +348,6 @@ fn allele_names(
         .collect())
 }
 
-/// The most differences a read can have from an allele with its recorded
-/// surroundings and still be reported.
-///
-/// The allele itself may differ in `max_distance` positions. The
-/// surroundings are cut off only if at least `min_quality` of their
-/// alignment columns match, which leaves room for
-/// `length * (1 - quality) / quality` differences in them. Without
-/// surroundings, or when sequences that could not be trimmed are kept, no
-/// such limit holds.
-fn max_useful_differences(params: &BlastParams) -> Option<usize> {
-    let surroundings = params.forward_extension + params.reverse_extension;
-    if surroundings == 0 || params.keep_failed || params.min_quality <= 0.0 {
-        return None;
-    }
-    let in_surroundings =
-        (surroundings as f64 * (1.0 - params.min_quality) / params.min_quality).ceil();
-    Some(params.max_distance.max(0) as usize + in_surroundings as usize)
-}
-
 /// Run the command.
 pub fn run(params: &BlastParams) -> Result<()> {
     info!(
@@ -461,7 +442,6 @@ pub fn run(params: &BlastParams) -> Result<()> {
             max_distance: params.max_distance,
             min_edge: params.edge,
             min_subject_coverage: params.subject_coverage,
-            max_differences: max_useful_differences(params),
             verbose: params.verbose,
             overwrite: params.overwrite,
         },
@@ -574,48 +554,6 @@ fn clusters_without_allele_key(clusters: &Frame) -> Result<Frame> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn params(forward: usize, reverse: usize, max_distance: i64, min_quality: f64) -> BlastParams {
-        BlastParams {
-            input: PathBuf::new(),
-            fasta: PathBuf::new(),
-            output: PathBuf::new(),
-            pseudo: None,
-            min_full_count: 5,
-            min_full_ratio: 0.1,
-            subject_coverage: 0.1,
-            max_distance,
-            min_length: 290,
-            edge: 0,
-            aligner: Aligner::Builtin,
-            overwrite: false,
-            forward_extension: forward,
-            reverse_extension: reverse,
-            extension_max_distance: 0,
-            gene_context: true,
-            min_quality,
-            name_substrings_as_known: true,
-            keep_failed: false,
-            min_core_coverage: 0.6,
-            top: 1,
-            verbose: false,
-            evidence: true,
-            work_dir: String::new(),
-        }
-    }
-
-    #[test]
-    fn useful_differences_follow_from_distance_and_surroundings() {
-        // 14 in the allele; 40 bases around it at quality 0.5 leave room
-        // for 40 more.
-        assert_eq!(max_useful_differences(&params(20, 20, 14, 0.5)), Some(54));
-        assert_eq!(max_useful_differences(&params(20, 20, 14, 0.75)), Some(28));
-        // No surroundings, nothing trimmed: no limit.
-        assert_eq!(max_useful_differences(&params(0, 0, 14, 0.5)), None);
-        let mut kept = params(20, 20, 14, 0.5);
-        kept.keep_failed = true;
-        assert_eq!(max_useful_differences(&kept), None);
-    }
 
     #[test]
     fn novel_subject_ids_map_to_their_base_allele() {

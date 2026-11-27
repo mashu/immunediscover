@@ -132,28 +132,36 @@ as a fraction of a difference (two fifths with the default scores), so
 that an allele that fits inside the read is preferred to one that does
 not.
 
-Finding the nearest allele is done in steps that avoid work:
+Finding the nearest allele is done in steps that avoid work. No read is
+given up in any of them: a read that is not settled in one step goes on
+to the next.
 
-1. **Candidates.** Every stretch of 10 bases of every allele is noted in
+1. **Alleles that lie in the read unchanged** are found first, by one
+   pass over the read that looks for all alleles at once, in both
+   orientations. Such a read needs nothing else. If several alleles lie
+   in it unchanged, the longest is taken.
+2. **Candidates.** Every stretch of 10 bases of every allele is noted in
    an index. A read is cut into such stretches too, and the alleles that
    share stretches with it are its candidates. The shared stretches also
    show where in the read the allele lies. Alleles that are nearly the
    same (the alleles of one gene, typically) form a group and are found
    together. Alleles shorter than 30 bases hold too few such stretches
    and are compared with every read.
-2. **Alleles in the read with at most one mismatch** are recognised by
-   comparing them with the read base by base. For most reads this
-   already names the nearest allele.
-3. **Counting differences.** For the other candidates the least number
+   A read that shares few stretches with every allele is looked at more
+   closely: all its stretches are used, not every fourth.
+3. **Alleles in the read with one mismatch** are recognised by comparing
+   them with the read base by base.
+4. **Counting differences.** For the other candidates the least number
    of differences is counted with a method whose cost grows with that
    number, not with the length of the sequences (Landau and Vishkin).
    Counting stops as soon as a candidate has more differences than the
    nearest allele found so far. A group is skipped as a whole when its
    first allele is already too far.
-4. **One alignment.** The nearest allele is aligned to the read to place
+5. **One alignment.** The nearest allele is aligned to the read to place
    its gaps (the method of Gotoh, with separate costs for starting and
    extending a gap). This gives the positions, the CIGAR and the
-   sequence that are reported.
+   sequence that are reported. Reads settled in step 1 or 3 have no gaps
+   and are not aligned.
 
 A candidate is passed over without counting only when it shares too few
 stretches with the read to be as near as the nearest allele so far: one
@@ -171,10 +179,11 @@ cores; set the environment variable `RAYON_NUM_THREADS` to use fewer.
 - A read is expected to hold the gene in one piece. A read that needs
   more than 128 differences to match an allele is not matched to it.
 - An allele of 30 bases or more is found through the stretches of 10
-  bases it shares with the read. The nearest allele is certain to be
-  found when the read is within about one difference in ten bases of
-  it. Further away few stretches are shared: such a read may be given a
-  slightly more distant allele of the same gene, or no allele at all.
+  bases it shares with the read. Every allele that shares at least two
+  of them with the read is compared with it. A read with differences so
+  dense and so evenly spread that it shares fewer with its nearest
+  allele (about one difference in every ten bases, or more) can be given
+  a more distant allele, or none.
 - Where a read ends inside an allele, how much of the allele lies beyond
   the read is taken from the alignment. Between alleles of one gene that
   are almost equally near, the choice can then differ by one difference

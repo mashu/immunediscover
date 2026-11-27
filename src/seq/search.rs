@@ -21,6 +21,7 @@ pub struct Occurrence {
 }
 
 /// A fixed set of non-empty patterns searched simultaneously.
+#[derive(Debug)]
 pub struct PatternSet {
     automaton: AhoCorasick,
     n_patterns: usize,
@@ -68,6 +69,15 @@ impl PatternSet {
                 end: m.end(),
             })
             .collect()
+    }
+
+    /// Call `found(pattern, start, end)` for every occurrence of every
+    /// pattern in `text`, overlapping ones included, in order of their end
+    /// position; `start..end` counts from 0.
+    pub fn each_occurrence(&self, text: &[u8], mut found: impl FnMut(usize, usize, usize)) {
+        for m in self.automaton.find_overlapping_iter(text) {
+            found(m.pattern().as_usize(), m.start(), m.end());
+        }
     }
 
     /// Leftmost occurrence of every pattern present in `text`, ordered by

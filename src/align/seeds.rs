@@ -145,6 +145,11 @@ pub struct Candidate {
     pub votes: u32,
     /// Read position minus subject position where most words agree.
     pub diagonal: isize,
+    /// The lowest and the highest diagonal on which words agree (two
+    /// votes or more close together). They differ from `diagonal` when
+    /// read and subject are shifted against each other part of the way:
+    /// an inserted or deleted stretch.
+    pub spread: (isize, isize),
 }
 
 /// Counters reused between reads.
@@ -154,9 +159,11 @@ pub struct Votes {
     counts: Vec<u16>,
     /// Cells of `counts` that are not zero.
     touched: Vec<u32>,
-    /// Per subject: all votes, and the best two neighbouring groups.
+    /// Per subject: all votes, the best two neighbouring groups, and the
+    /// lowest and highest group with two votes or more.
     totals: Vec<u32>,
     strongest: Vec<(u32, u32)>,
+    spread: Vec<(u32, u32)>,
     voted: Vec<u32>,
 }
 
@@ -184,6 +191,7 @@ impl Votes {
         if self.totals.len() < index.subjects {
             self.totals.resize(index.subjects, 0);
             self.strongest.resize(index.subjects, (0, 0));
+            self.spread.resize(index.subjects, (u32::MAX, 0));
         }
 
         for (position, word) in words(read).filter(|(position, _)| position % step == 0) {
@@ -212,6 +220,11 @@ impl Votes {
             if self.totals[subject] == 0 {
                 self.voted.push(subject as u32);
                 self.strongest[subject] = (0, 0);
+                self.spread[subject] = (u32::MAX, 0);
+            }
+            if here >= 2 {
+                let (low, high) = self.spread[subject];
+                self.spread[subject] = (low.min(group as u32), high.max(group as u32));
             }
             self.totals[subject] += here;
             let (best, best_group) = self.strongest[subject];
@@ -229,10 +242,20 @@ impl Votes {
             // Vote-weighted middle of the two groups.
             let middle = |g: usize| ((g << GROUP_BITS) + GROUP / 2) as u64;
             let centre = (middle(group) * here + middle(group + 1) * next) / (here + next);
+            let diagonal = centre as isize - shift as isize;
+            let (low, high) = self.spread[subject];
+            let spread = if low == u32::MAX {
+                (diagonal, diagonal)
+            } else {
+                let first = ((low as usize) << GROUP_BITS) as isize - shift as isize;
+                let last = (((high as usize + 1) << GROUP_BITS) - 1) as isize - shift as isize;
+                (first.min(diagonal), last.max(diagonal))
+            };
             candidates.push(Candidate {
                 subject,
                 votes: self.totals[subject],
-                diagonal: centre as isize - shift as isize,
+                diagonal,
+                spread,
             });
             self.totals[subject] = 0;
         }
@@ -279,6 +302,25 @@ mod tests {
         assert_eq!(found.subject, 1);
         assert_eq!(found.votes as usize, gene.len() - WORD + 1);
         assert!((found.diagonal - 31).unsigned_abs() <= GROUP);
+    }
+
+    #[test]
+    fn a_shifted_part_of_the_read_widens_the_spread() {
+        let gene: &[u8] = b"ACGGTCATTGCAGGCTTAACGTTAGCCATGCAAGTCCGATAGGCTTAATTGACCGTAAGGCTAGCTAGGATCCGATCGGATTCGAGCTAGGC";
+        let index = index(&[gene]);
+        // The read holds 30 bases that the gene lacks, in its middle.
+        let mut read = gene[..46].to_vec();
+        read.extend_from_slice(b"TTTTTTTTTTTTTTTTTTTTTTTTTTTTTT");
+        read.extend_from_slice(&gene[46..]);
+        let mut candidates = Vec::new();
+        Votes::default().collect(&index, &read, 1, &mut candidates);
+        let (first, last) = candidates[0].spread;
+        assert!(first <= 0 && last >= 30, "{first}..{last}");
+        // Without the shift the spread stays within one group of diagonals.
+        candidates.clear();
+        Votes::default().collect(&index, gene, 1, &mut candidates);
+        let (first, last) = candidates[0].spread;
+        assert!(first <= 0 && last >= 0 && last - first < 2 * GROUP as isize);
     }
 
     #[test]

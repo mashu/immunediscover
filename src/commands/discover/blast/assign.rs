@@ -48,10 +48,6 @@ pub struct AssignSettings {
     pub min_edge: i64,
     /// Minimum alignment length relative to the subject length.
     pub min_subject_coverage: f64,
-    /// Most differences between a read and a database sequence that the
-    /// later steps can still accept; `None` if they set no such limit.
-    /// The built-in aligner does not look further.
-    pub max_differences: Option<usize>,
     /// Also write intermediate tables into the run directory.
     pub verbose: bool,
     /// Ignore a cached BLAST result.
@@ -148,7 +144,8 @@ fn oriented_segment(segment: &str, read: &str, minus_strand: bool) -> Option<(St
 
 /// The built-in aligner matches a read to a database sequence with at
 /// most `1 - BUILTIN_MIN_IDENTITY` differences per base. Low on purpose:
-/// `--maxdist` decides what is too far ([`AssignSettings::max_differences`]).
+/// no read that resembles an allele is given up here; the thresholds of
+/// the later steps decide what is reported.
 const BUILTIN_MIN_IDENTITY: f64 = 0.7;
 
 /// Best BLAST hit of every read: run `blastn` (or reuse its cached result)
@@ -240,7 +237,6 @@ fn builtin_best_hits(
     let search = Settings {
         min_identity: BUILTIN_MIN_IDENTITY,
         min_coverage: settings.min_subject_coverage,
-        max_differences: settings.max_differences,
         ..Settings::default()
     };
     let texts: Vec<&str> = sequences.iter().map(String::as_str).collect();

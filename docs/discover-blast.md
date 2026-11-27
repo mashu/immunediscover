@@ -148,9 +148,12 @@ are not cached: every run aligns again. [The built-in aligner](align.md)
 describes how it works.
 
 It gives every read to the nearest allele (fewest differences per base).
-Reads that are too far from every allele to be reported are not followed
-further: more differences than `--maxdist` allows in the allele plus what
-`--minquality` allows in the surroundings.
+A read that holds an allele with its surroundings unchanged is recognised
+at once; every other read is compared with the alleles it resembles. No
+read is set aside at this step because it is far from the database: a
+read is left without an allele only if it differs from every allele in
+more than three of ten bases. What is reported is decided afterwards, by
+`--maxdist` and the other thresholds.
 
 ## The output table
 

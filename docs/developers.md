@@ -272,13 +272,17 @@ See the header of `parity/runall.sh` for the environment variables.
 differences per base, bases beyond the read end weighted
 `matched / (matched - mismatched)`. It needs no alignment for that:
 
+- An Aho-Corasick automaton over all subjects and their reverse
+  complements names the reads that hold a subject unchanged in one pass
+  (`unchanged_subject`); nothing else is done for them.
 - `align/seeds.rs`: 10-mer index over groups of subjects of one length
-  within 8 mismatches of the first member; votes per group and diagonal.
-  A group is passed over when its votes prove it too far: with every
-  `step`-th word of the read looked up, one difference removes at most
-  `ceil(10 / step)` shared words. Beyond the twelve best-voted groups, a
-  group also needs a quarter of the votes expected at the accepted
-  identity.
+  within 8 mismatches of the first member; votes per group and diagonal,
+  and the spread of voted diagonals (a read with an inserted or deleted
+  stretch votes on two). A group is passed over only when its votes prove
+  it too far: with every `step`-th word of the read looked up, one
+  difference removes at most `ceil(10 / step)` shared words. A read
+  whose best group shares less than half the words of an unchanged
+  subject is voted again with every word.
 - `align/edits.rs`: mismatch count with cutoff, and the least number of
   differences by furthest-reaching diagonals (Landau-Vishkin), with a
   limit and with subject bases allowed to hang over the read ends. The
@@ -303,18 +307,19 @@ assignment is the same code for both aligners. `ki-check
 281 000 reads, 2 cores: demultiplex 3.9 s, exact search 1.1–1.4 s,
 heptamer 2.4 s, BLAST discovery 57 s (48 s of it inside `blastn`).
 
-Assignment of reads, 2 cores. In all three rows the discovery result is
-the same table with both aligners (the D plate apart from read counts,
-which are higher with the built-in aligner: BLAST cuts some matches short
-of the required length).
+Assignment of reads in `discover blast`, 2 cores. In all three rows the
+discovery result is the same table with both aligners (the D plate apart
+from read counts, which are higher with the built-in aligner: BLAST cuts
+some matches short of the required length).
 
 | Plate | Reads | `blastn` | Built-in aligner |
 |---|---|---|---|
-| V, invented genes: 63 genes in 7 families, 256 alleles | 151 200 | 44 s | 4.1 s |
-| D, invented genes: 25 genes of 11 to 37 bases | 96 000 | 187 s | 0.6 s |
-| V, the human IGHV set enlarged to 1 300 alleles, a fifth of the reads 12 to 30 % away from every allele | 100 000 | 350 s | 12.8 s |
+| V, invented genes: 63 genes in 7 families, 256 alleles | 151 200 | 44 s | 4.0 s |
+| D, invented genes: 25 genes of 11 to 37 bases | 96 000 | 187 s | 0.4 s |
+| V, the human IGHV set enlarged to 1 300 alleles, a fifth of the reads 12 to 30 % away from every allele | 100 000 | 350 s | 91 s |
 
-Reads within one mismatch of an allele cost least. Reads further away
-cost more with every difference, up to the limit beyond which they are
-not followed (`max_useful_differences` in `discover blast`,
-`--min-identity` in `align`).
+Reads that hold an allele unchanged are named at about 250 000 per
+second and core. Reads near an allele cost little. Reads far from every
+allele cost most, because every group that shares words with them is
+counted up to the limit of 30 % differences: they are the 91 s of the
+last row. With `align --min-identity 0.9` the same reads take 20 s.

@@ -32,6 +32,7 @@ use super::gotoh::{align, align_widening, is_same_base, Band, Ends, Op, Path, Sc
 use super::seeds::{Candidate, Votes, WordIndex, GROUP, WORD};
 use crate::error::{Error, Result};
 use crate::logging::Progress;
+use crate::seq::search::PatternSet;
 
 /// Subjects shorter than this are aligned to every read in whole: they
 /// hold too few words to be found by them.
@@ -46,12 +47,6 @@ const MIN_VOTES: u32 = 2;
 const MAX_STEP: usize = 4;
 /// A subject of this length is covered by about this many looked-up words.
 const WORDS_PER_SUBJECT: usize = 40;
-/// This many groups with the most shared words are always judged. A
-/// further group is judged only if it shares enough words: a quarter of
-/// what a subject with the most accepted differences is expected to share
-/// (the share of equal bases to the power of the word length).
-const ALWAYS_JUDGED: usize = 12;
-const SHARE_OF_EXPECTED: f64 = 0.25;
 /// Most mismatches between a subject and the first subject of its group.
 const GROUP_RADIUS: usize = 8;
 /// More differences than this are not counted: a read this far from a
@@ -70,9 +65,6 @@ pub struct Settings {
     pub min_identity: f64,
     /// Smallest share of the subject that must lie inside the read (0-1).
     pub min_coverage: f64,
-    /// Most differences between a read and a subject, whatever their
-    /// lengths.
-    pub max_differences: Option<usize>,
     /// Whether a read may end inside a subject.
     pub ends: Ends,
 }
@@ -83,7 +75,6 @@ impl Default for Settings {
             scoring: Scoring::default(),
             min_identity: 0.9,
             min_coverage: 0.5,
-            max_differences: None,
             ends: Ends::ReadMayEndInside,
         }
     }
@@ -198,6 +189,8 @@ pub struct Scratch {
     order: Vec<usize>,
     /// Members of a group still to be judged.
     pending: Vec<usize>,
+    /// Diagonals on which members of a group may lie nearly unchanged.
+    places: Vec<isize>,
     forward: Vec<u8>,
     reverse: Vec<u8>,
 }
@@ -240,6 +233,28 @@ fn gapless(subject: &[u8], read: &[u8], start: usize, scoring: &Scoring) -> Path
         ops,
         at_band_edge: false,
     }
+}
+
+/// Align `subject` to `read` on the diagonals `band`, and beyond them
+/// for as long as the alignment runs along their border.
+fn align_in(
+    band: (isize, isize),
+    subject: &[u8],
+    read: &[u8],
+    settings: &Settings,
+    workspace: &mut Workspace,
+) -> Option<Path> {
+    let half_width = ((band.1 - band.0 + 1) / 2).max(1) as usize;
+    align_widening(
+        subject,
+        read,
+        &settings.scoring,
+        (band.0 + band.1) / 2,
+        half_width,
+        MAX_HALF_WIDTH.max(half_width),
+        settings.ends,
+        workspace,
+    )
 }
 
 /// How near a subject is to a read: the smaller `cost / length`, the
@@ -299,8 +314,9 @@ struct Nearest {
     nearness: Nearness,
     subject: usize,
     minus_strand: bool,
-    /// Where to align: read position minus subject position.
-    diagonal: isize,
+    /// Where to align: the lowest and the highest diagonal (read position
+    /// minus subject position) that were tried.
+    band: (isize, isize),
     /// The alignment, where it is already known.
     path: Option<Path>,
 }
@@ -335,6 +351,12 @@ pub struct Database {
     short: Vec<usize>,
     /// Every `step`-th word of a read is looked up.
     step: usize,
+    /// Every subject and its reverse complement, to find reads that hold
+    /// a subject unchanged; pattern `2 * s` is subject `s` as written,
+    /// `2 * s + 1` its reverse complement.
+    unchanged: PatternSet,
+    /// Shortest subject found by words.
+    shortest: usize,
 }
 
 impl Database {
@@ -409,12 +431,30 @@ impl Database {
             .min()
             .unwrap_or(SHORT_SUBJECT);
         let step = (shortest / WORDS_PER_SUBJECT).clamp(1, MAX_STEP);
+        // A subject with an ambiguous base never lies unchanged in a
+        // read; a pattern that cannot occur stands in for it.
+        let mut patterns: Vec<Vec<u8>> = Vec::with_capacity(2 * subjects.len());
+        for subject in &subjects {
+            let plain = subject.sequence.iter().all(|&b| is_same_base(b, b));
+            let mut turned = Vec::new();
+            reverse_complement_into(&subject.sequence, &mut turned);
+            if plain {
+                patterns.push(subject.sequence.clone());
+                patterns.push(turned);
+            } else {
+                patterns.push(vec![0]);
+                patterns.push(vec![0]);
+            }
+        }
+        let unchanged = PatternSet::new(patterns)?;
         Ok(Database {
             subjects,
             groups,
             index,
             short,
             step,
+            unchanged,
+            shortest,
         })
     }
 
@@ -438,6 +478,11 @@ impl Database {
         let mut reverse = std::mem::take(&mut scratch.reverse);
         forward.clear();
         forward.extend(read.trim().bytes().map(|b| b.to_ascii_uppercase()));
+        if let Some(hit) = self.unchanged_subject(&forward, &settings.scoring) {
+            scratch.forward = forward;
+            scratch.reverse = reverse;
+            return Some(hit);
+        }
         reverse_complement_into(&forward, &mut reverse);
         let hit = self
             .nearest([&forward, &reverse], settings, scratch)
@@ -449,14 +494,11 @@ impl Database {
                 };
                 let sequence = &self.subjects[nearest.subject].sequence;
                 let path = nearest.path.or_else(|| {
-                    align_widening(
+                    align_in(
+                        nearest.band,
                         sequence,
                         read,
-                        &settings.scoring,
-                        nearest.diagonal,
-                        HALF_WIDTH,
-                        MAX_HALF_WIDTH,
-                        settings.ends,
+                        settings,
                         &mut scratch.workspace,
                     )
                 })?;
@@ -470,6 +512,51 @@ impl Database {
         scratch.forward = forward;
         scratch.reverse = reverse;
         hit
+    }
+
+    /// The subject that lies in the read without any difference, in either
+    /// orientation: the longest one, then the first of the database, then
+    /// the read as written. Found by one pass over the read, without
+    /// looking for candidates.
+    fn unchanged_subject(&self, read: &[u8], scoring: &Scoring) -> Option<Hit> {
+        // (length, subject, reverse-complemented) and where the match ends.
+        let mut best: Option<((usize, usize, bool), usize)> = None;
+        self.unchanged.each_occurrence(read, |pattern, start, end| {
+            let found = (end - start, pattern / 2, pattern % 2 == 1);
+            let better = match &best {
+                None => true,
+                Some((held, _)) => {
+                    (found.0, held.1, held.2) > (held.0, found.1, found.2)
+                        // The same subject again: on the other strand the
+                        // last occurrence is the first of the turned read.
+                        || (found == *held && found.2)
+                }
+            };
+            if better {
+                best = Some((found, end));
+            }
+        });
+        let ((length, subject, minus_strand), end) = best?;
+        // Position in the read as it matches the subject.
+        let start = if minus_strand {
+            read.len() - end
+        } else {
+            end - length
+        };
+        Some(Hit {
+            subject,
+            minus_strand,
+            read_length: read.len(),
+            path: Path {
+                score: scoring.matched * length as i32,
+                subject_start: 0,
+                subject_end: length,
+                read_start: start,
+                read_end: start + length,
+                ops: vec![Op::Match; length],
+                at_band_edge: false,
+            },
+        })
     }
 
     /// Keep a subject in `nearest` if it is nearer than what is there. Of
@@ -495,9 +582,7 @@ impl Database {
     fn limits(&self, nearest: &Option<Nearest>, settings: &Settings, length: usize) -> Limits {
         let costs = Costs::of(&settings.scoring);
         let accepted = ((1.0 - settings.min_identity) * length as f64) as usize;
-        let accepted = accepted
-            .min(settings.max_differences.unwrap_or(usize::MAX))
-            .min(MAX_COUNTED);
+        let accepted = accepted.min(MAX_COUNTED);
         let outside = if settings.ends == Ends::ReadMayEndInside {
             ((1.0 - settings.min_coverage) * length as f64) as usize
         } else {
@@ -547,22 +632,40 @@ impl Database {
                     nearness,
                     subject,
                     minus_strand,
-                    diagonal: path.read_start as isize - path.subject_start as isize,
+                    band: (0, 0),
                     path: Some(path),
                 };
                 Self::offer(&mut nearest, offered);
             }
         }
 
-        // Groups sharing words with either orientation, most words first.
-        scratch.candidates.clear();
-        scratch
-            .votes
-            .collect(&self.index, strands[0], self.step, &mut scratch.candidates);
-        let forward_candidates = scratch.candidates.len();
-        scratch
-            .votes
-            .collect(&self.index, strands[1], self.step, &mut scratch.candidates);
+        // Groups sharing words with either orientation. A read that
+        // shares few words with every group is far from all of them:
+        // every word of it is then looked up, not every `step`-th.
+        let mut step = self.step;
+        let mut forward_candidates;
+        loop {
+            scratch.candidates.clear();
+            scratch
+                .votes
+                .collect(&self.index, strands[0], step, &mut scratch.candidates);
+            forward_candidates = scratch.candidates.len();
+            scratch
+                .votes
+                .collect(&self.index, strands[1], step, &mut scratch.candidates);
+            let most = scratch
+                .candidates
+                .iter()
+                .map(|c| c.votes)
+                .max()
+                .unwrap_or(0);
+            let unchanged = self.shortest.saturating_sub(WORD + GROUP) / step;
+            if step == 1 || 2 * most as usize >= unchanged {
+                break;
+            }
+            step = 1;
+        }
+        // Most words first.
         let mut order = std::mem::take(&mut scratch.order);
         let candidates = std::mem::take(&mut scratch.candidates);
         order.clear();
@@ -573,17 +676,16 @@ impl Database {
                 .then(a.cmp(&b))
         });
         let top_votes = order.first().map_or(0, |&i| candidates[i].votes);
-        for (place, &number) in order.iter().enumerate() {
+        for &number in &order {
             let candidate = candidates[number];
             if candidate.votes < MIN_VOTES {
                 break;
             }
             let minus_strand = number >= forward_candidates;
             let read = strands[usize::from(minus_strand)];
-            let always = place < ALWAYS_JUDGED;
             self.judge_group(
                 candidate,
-                (always, top_votes),
+                (top_votes, step),
                 read,
                 minus_strand,
                 settings,
@@ -602,7 +704,7 @@ impl Database {
     fn judge_group(
         &self,
         candidate: Candidate,
-        (always, top_votes): (bool, u32),
+        (top_votes, step): (u32, usize),
         read: &[u8],
         minus_strand: bool,
         settings: &Settings,
@@ -619,26 +721,28 @@ impl Database {
         // Shared words: a difference removes at most `lost` of the
         // looked-up words, so few shared words mean many differences.
         let span = ((diagonal + m).min(n) - diagonal.max(0)).max(0) as usize;
-        let ideal = span.saturating_sub(WORD + GROUP) / self.step;
+        let ideal = span.saturating_sub(WORD + GROUP) / step;
         let expected = ideal.min(top_votes as usize);
-        let lost = WORD.div_ceil(self.step);
+        let lost = WORD.div_ceil(step);
         let votes = candidate.votes as usize;
         if expected.saturating_sub(votes).div_ceil(lost) > limits.differences {
             return;
         }
-        // Beyond the best-voted groups: a share of the words that a
-        // subject as far as `settings` accept is expected to share.
-        let accepted = self.limits(&None, settings, length).differences;
-        let identity = 1.0 - accepted as f64 / length as f64;
-        let kept = identity.max(0.0).powi(WORD as i32) * SHARE_OF_EXPECTED;
-        if !always && (votes as f64) < ideal as f64 * kept {
-            return;
-        }
-
         // Diagonals that are tried, and those among them on which the
         // whole subject lies inside the read.
+        // Around the diagonal with most words, and as far as words agree
+        // on other diagonals (a read with an inserted or deleted stretch).
         let half = HALF_WIDTH as isize;
-        let band = (diagonal - half, diagonal + half);
+        let widest = MAX_HALF_WIDTH as isize;
+        let (first_voted, last_voted) = candidate.spread;
+        let band = (
+            (diagonal - half)
+                .min(first_voted - half / 2)
+                .max(diagonal - widest),
+            (diagonal + half)
+                .max(last_voted + half / 2)
+                .min(diagonal + widest),
+        );
         let whole = (band.0.max(0), band.1.min(n - m));
         // Whether, on a tried diagonal, between one and `bases` bases of
         // the subject lie beyond an end of the read.
@@ -673,17 +777,25 @@ impl Database {
                 nearness,
                 subject,
                 minus_strand,
-                diagonal,
+                band,
                 path,
             };
             Self::offer(nearest, offered);
         };
 
-        // Members that lie in the read with at most one mismatch.
+        // Members that lie in the read with at most one mismatch. They can
+        // do so only where the first member has few mismatches itself.
+        let leader = &self.subjects[group.members[0]].sequence;
+        let mut places = std::mem::take(&mut scratch.places);
+        places.clear();
+        places.extend((whole.0..=whole.1).filter(|&diagonal| {
+            let start = diagonal as usize;
+            mismatches(leader, &read[start..start + length], group.radius + 1).is_some()
+        }));
         scratch.pending.clear();
         for &subject in &group.members {
             let sequence = &self.subjects[subject].sequence;
-            match self.nearly_unchanged(sequence, read, whole) {
+            match self.nearly_unchanged(sequence, read, &places) {
                 Some((0, start)) => {
                     let path = gapless(sequence, read, start, &settings.scoring);
                     offer(nearest, subject, 0, Some(path));
@@ -700,6 +812,8 @@ impl Database {
                 _ => scratch.pending.push(subject),
             }
         }
+
+        scratch.places = places;
 
         // The others: the least differences, counted only as far as the
         // nearest subject so far allows.
@@ -743,16 +857,7 @@ impl Database {
             });
             if outside.is_some() {
                 // How many bases lie beyond is known from an alignment.
-                let path = align_widening(
-                    sequence,
-                    read,
-                    &settings.scoring,
-                    diagonal,
-                    HALF_WIDTH,
-                    MAX_HALF_WIDTH,
-                    settings.ends,
-                    &mut scratch.workspace,
-                );
+                let path = align_in(band, sequence, read, settings, &mut scratch.workspace);
                 if let Some(path) = path {
                     let left_out = length - (path.subject_end - path.subject_start);
                     let cost = costs.of_path(&path, length);
@@ -775,16 +880,16 @@ impl Database {
 
     /// Where `subject` lies whole in the read with at most one mismatch:
     /// the number of mismatches and the start in the read, on the lowest
-    /// of the diagonals `whole` with the fewest mismatches.
+    /// of the diagonals `places` with the fewest mismatches.
     fn nearly_unchanged(
         &self,
         subject: &[u8],
         read: &[u8],
-        whole: (isize, isize),
+        places: &[isize],
     ) -> Option<(usize, usize)> {
         let m = subject.len();
         let mut found: Option<(usize, usize)> = None;
-        for diagonal in whole.0..=whole.1 {
+        for &diagonal in places {
             let limit = match found {
                 Some((0, _)) => break,
                 Some((fewest, _)) => fewest - 1,
@@ -1228,6 +1333,89 @@ mod tests {
             }
         }
         assert!(checked * 2 > rounds);
+    }
+
+    #[test]
+    fn an_allele_that_lies_unchanged_in_the_read_is_named_at_once() {
+        let mut dice = Dice(0x0DDB_A11A_D5EE_D5ED);
+        let gene = dice.sequence(120);
+        let part = gene[10..90].to_string();
+        let other = dice.sequence(120);
+        let with_n = format!("{}N{}", &other[..60], &other[61..]);
+        let database = Database::new([
+            ("part", part.as_str()),
+            ("gene*01", gene.as_str()),
+            ("gene*02", gene.as_str()),
+            ("other", with_n.as_str()),
+        ])
+        .unwrap();
+        let scoring = Scoring::default();
+        let settings = Settings::default();
+        let mut scratch = Scratch::default();
+
+        // The longest allele that fits wins, then the first of the database.
+        let read = format!("{}{gene}{}", dice.sequence(33), dice.sequence(21));
+        let hit = database
+            .unchanged_subject(read.as_bytes(), &scoring)
+            .unwrap();
+        assert_eq!(database.subject(hit.subject).name, "gene*01");
+        assert_eq!((hit.read_range(), hit.minus_strand), ((33, 153), false));
+        assert_eq!(hit.path.cigar(), "120=");
+        assert_eq!(database.best_hit(&read, &settings, &mut scratch), Some(hit));
+
+        // On the other strand, with the position in the read as written.
+        let turned = reverse_complement(&read).unwrap();
+        let hit = database
+            .unchanged_subject(turned.as_bytes(), &scoring)
+            .unwrap();
+        assert_eq!(database.subject(hit.subject).name, "gene*01");
+        assert_eq!((hit.read_range(), hit.minus_strand), ((21, 141), true));
+        assert_eq!(hit.segment(&turned), gene);
+
+        // Only the shorter allele lies in this read unchanged.
+        let read = format!("{}{part}{}", dice.sequence(15), dice.sequence(15));
+        let hit = database
+            .unchanged_subject(read.as_bytes(), &scoring)
+            .unwrap();
+        assert_eq!(database.subject(hit.subject).name, "part");
+
+        // A read with a difference is not named here, and not lost: the
+        // search that follows finds its allele.
+        let changed = dice.substituted(&gene, &[50]);
+        let read = format!("{}{changed}{}", dice.sequence(33), dice.sequence(21));
+        assert!(database
+            .unchanged_subject(read.as_bytes(), &scoring)
+            .is_none());
+        let hit = database.best_hit(&read, &settings, &mut scratch).unwrap();
+        assert_eq!(database.subject(hit.subject).name, "gene*01");
+        assert_eq!(hit.path.cigar(), "50=1X69=");
+
+        // An allele with an ambiguous base never counts as unchanged.
+        let read = format!("{}{with_n}{}", dice.sequence(20), dice.sequence(20));
+        assert!(database
+            .unchanged_subject(read.as_bytes(), &scoring)
+            .is_none());
+        let hit = database.best_hit(&read, &settings, &mut scratch).unwrap();
+        assert_eq!(database.subject(hit.subject).name, "other");
+        assert_eq!(hit.path.mismatches(), 1);
+    }
+
+    #[test]
+    fn a_read_with_a_long_inserted_stretch_still_finds_its_allele() {
+        let mut dice = Dice(0x05EE_D0F1_DEA5);
+        let alleles = alleles(&mut dice);
+        let database = Database::new(alleles.iter().map(|(n, s)| (n.as_str(), s))).unwrap();
+        // 20 bases that the allele lacks, in its middle: more than the
+        // band around one diagonal holds.
+        let allele = &alleles[4].1;
+        let inserted = format!("{}{}{}", &allele[..150], dice.sequence(20), &allele[150..]);
+        let read = read_of(&mut dice, &inserted);
+        let settings = Settings::default();
+        let hit = database
+            .best_hit(&read, &settings, &mut Scratch::default())
+            .unwrap();
+        assert_eq!(hit.subject, 4);
+        assert_eq!(hit.path.cigar(), "150=20I150=");
     }
 
     #[test]

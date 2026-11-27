@@ -76,7 +76,6 @@ impl AlignArgs {
                 },
                 min_identity: self.min_identity,
                 min_coverage: self.min_coverage,
-                max_differences: None,
                 ends: Ends::ReadMayEndInside,
             },
         })
