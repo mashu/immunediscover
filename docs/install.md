@@ -80,12 +80,21 @@ lists the checksums of the files.
 
 ## What else is needed
 
-| For | You need |
-|---|---|
-| `discover blast` | BLAST+ 2.15 to 2.17: `blastn` and `makeblastdb` on the `PATH`. With conda: `conda install -c bioconda blast=2.16` |
-| `search bwa` | `bwa` and a `bwa index` of the genome |
+Two commands use other programs, which the installer does not install. It
+does check for them, on Linux and macOS alike, and tells you at the end
+what it found and what is missing.
+
+| For | You need | One way to get it (Linux and macOS) |
+|---|---|---|
+| `discover blast` | BLAST+ 2.15 to 2.17: `blastn` and `makeblastdb` on the `PATH` | `conda install -c conda-forge -c bioconda blast=2.16` |
+| `search bwa` | `bwa`, and a `bwa index` of the genome | `conda install -c conda-forge -c bioconda bwa` |
 
 All other commands need nothing else.
+
+BLAST+ must be one of the versions named: `discover blast` refuses to run
+with an older or newer one, because its results depend on the version.
+A BLAST+ from another source (Homebrew, the NCBI download, a Linux
+package) works as long as its version is in that range.
 
 ## Updating and removing
 

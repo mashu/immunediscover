@@ -227,8 +227,30 @@ else
     say "Run: $name --help"
 fi
 
-if ! have blastn; then
-    say ""
-    say "Note: 'discover blast' needs BLAST+ 2.15 to 2.17 (blastn, makeblastdb), which was"
-    say "not found. One way to get it: conda install -c bioconda blast=2.16"
+# Two commands need other programs. Say now whether they are there, on
+# Linux and macOS alike, instead of leaving it to the first failed run.
+CONDA_HINT="conda install -c conda-forge -c bioconda"
+say ""
+say "Other programs:"
+if have blastn && have makeblastdb; then
+    blast_version="$(blastn -version 2>/dev/null | sed -n 's/^blastn: \([0-9][0-9.]*\).*/\1/p' | head -n 1)"
+    case "$blast_version" in
+        2.15.*|2.16.*|2.17.0)
+            say "  BLAST+ $blast_version found: 'discover blast' is ready." ;;
+        "")
+            say "  BLAST+ found, but its version could not be read. 'discover blast' needs 2.15.0 to 2.17.0." ;;
+        *)
+            say "  BLAST+ $blast_version found, but 'discover blast' needs 2.15.0 to 2.17.0."
+            say "      To get a suitable one: $CONDA_HINT blast=2.16" ;;
+    esac
+else
+    say "  BLAST+ not found (blastn, makeblastdb). 'discover blast' needs version 2.15.0 to 2.17.0."
+    say "      To get it: $CONDA_HINT blast=2.16"
 fi
+if have bwa; then
+    say "  bwa found: 'search bwa' is ready."
+else
+    say "  bwa not found. Only 'search bwa' needs it."
+    say "      To get it: $CONDA_HINT bwa"
+fi
+say "  All other commands need nothing else."
