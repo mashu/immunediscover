@@ -10,7 +10,7 @@ use super::workdir::{content_digest, file_identity, replace_extension, Fingerpri
 use crate::error::{Error, Result};
 use crate::frame::{Column, Frame, Value};
 use crate::io::compress;
-use crate::io::tsv::{read_table, read_tsv, write_table, ReadOptions, WriteOptions};
+use crate::io::tsv::{read_table, write_table, ReadOptions, WriteOptions};
 use crate::seq::dna::reverse_complement;
 use crate::seq::gene_of;
 use crate::seq::search::find_first;
@@ -128,6 +128,7 @@ fn oriented_segment(segment: &str, read: &str, minus_strand: bool) -> Option<(St
 /// `full_count`, `gene`, `full_ratio`, sorted by well, case and subject.
 pub fn blast_discover(
     input_tsv: &Path,
+    all_reads: &Frame,
     database_fasta: &Path,
     layout: &WorkLayout,
     settings: &AssignSettings,
@@ -135,7 +136,6 @@ pub fn blast_discover(
     verify_blastn_version()?;
     layout.create_directories()?;
 
-    let all_reads = read_tsv(input_tsv)?;
     info!(
         "Read {} rows from {} before BLAST assignment",
         all_reads.nrows(),
@@ -146,7 +146,6 @@ pub fn blast_discover(
     if reads.nrows() != all_reads.nrows() {
         warn!("Duplicated names found in input. Using unique ones but this is likely user error!");
     }
-    write_query_fasta(&layout.query_fasta, &reads)?;
 
     // The cached hits depend on the reads, the database and the arguments.
     let fingerprint = Fingerprint::of(&[
@@ -182,15 +181,21 @@ pub fn blast_discover(
                 legacy.display()
             );
         }
-        blastn(
+        // The reads are written out only when BLAST is going to read them,
+        // and the result takes its place only once it is complete.
+        write_query_fasta(&layout.query_fasta, &reads)?;
+        let partial = layout.run_dir.join("hits.partial.blast.gz");
+        let searched = blastn(
             &layout.query_fasta,
             &database,
-            &layout.hits,
+            &partial,
             &settings.blast_args,
-        )?;
+        );
+        let _ = std::fs::remove_file(&layout.query_fasta);
+        searched?;
+        std::fs::rename(&partial, &layout.hits).map_err(|e| Error::io(&layout.hits, e))?;
         fingerprint.record(&layout.hits)?;
     }
-    std::fs::remove_file(&layout.query_fasta).map_err(|e| Error::io(&layout.query_fasta, e))?;
 
     let hits = read_table(&layout.hits, &ReadOptions::tsv().header(&COLUMNS))?;
     info!(

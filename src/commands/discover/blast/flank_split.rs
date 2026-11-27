@@ -135,7 +135,10 @@ pub fn report_flank_split_losses(
 
     let mut by_gene: BTreeMap<&str, Vec<&FlankSplitAllele>> = BTreeMap::new();
     for allele in lost {
-        by_gene.entry(allele.gene.as_str()).or_default().push(allele);
+        by_gene
+            .entry(allele.gene.as_str())
+            .or_default()
+            .push(allele);
     }
 
     warn!(
@@ -219,14 +222,8 @@ fn flank_split_frame(lost: &[FlankSplitAllele]) -> Result<Frame> {
             "sseqid",
             Column::from_strings(lost.iter().map(|a| a.sseqid.as_str())),
         ),
-        (
-            "count",
-            Column::from_ints(lost.iter().map(|a| a.count)),
-        ),
-        (
-            "ratio",
-            Column::from_floats(lost.iter().map(|a| a.ratio)),
-        ),
+        ("count", Column::from_ints(lost.iter().map(|a| a.count))),
+        ("ratio", Column::from_floats(lost.iter().map(|a| a.ratio))),
         (
             "best_full_count",
             Column::from_ints(lost.iter().map(|a| a.best_full_count)),
@@ -268,10 +265,7 @@ mod tests {
         // Allele C: count 10 (fails allele-level -c 18).
         Frame::from_columns([
             ("well", Column::from_ints([3, 3, 3, 3, 3])),
-            (
-                "case",
-                Column::from_strings(["D1", "D1", "D1", "D1", "D1"]),
-            ),
+            ("case", Column::from_strings(["D1", "D1", "D1", "D1", "D1"])),
             (
                 "gene",
                 Column::from_strings(["IGHV1-46", "IGHV1-46", "IGHV1-46", "IGHV1-2", "IGHV1-2"]),
@@ -290,10 +284,7 @@ mod tests {
                 Column::from_floats([0.5, 0.17, 0.13, 1.0, 0.3]),
             ),
             ("count", Column::from_ints([24, 24, 24, 30, 10])),
-            (
-                "ratio",
-                Column::from_floats([0.8, 0.8, 0.8, 1.0, 0.3]),
-            ),
+            ("ratio", Column::from_floats([0.8, 0.8, 0.8, 1.0, 0.3])),
         ])
         .unwrap()
     }

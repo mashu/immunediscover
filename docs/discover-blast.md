@@ -182,3 +182,12 @@ contains a database allele exactly, so no surroundings are learned. Set
 **The second run is not faster / uses old results.** The cache is in
 `--work-dir`. It is reused only when reads, database and surroundings
 settings are unchanged; `-o` forces a new search.
+
+**"Another discover blast run is working on the same reads and
+database".** Every combination of reads, database and pseudogenes has its
+own folder of intermediate files, and one run uses it at a time. Runs on
+other reads or with another database (V, D and J on the same plate, for
+example) can go on side by side. For two runs on the same reads and
+database, wait for the first or give the second another `--work-dir`. If
+the message appears although no run is active, delete the `lock` file it
+names.

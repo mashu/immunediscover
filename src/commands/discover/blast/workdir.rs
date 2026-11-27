@@ -50,7 +50,9 @@ pub fn resolve_work_dir(argument: &str) -> Result<PathBuf> {
 #[derive(Debug, Clone)]
 pub struct WorkLayout {
     pub work_dir: PathBuf,
-    /// Per-input directory holding the BLAST cache and query FASTA.
+    /// Directory of this combination of reads, database and pseudogenes.
+    /// Every intermediate file lives here, so that runs on other reads or
+    /// with another database never touch each other's files.
     pub run_dir: PathBuf,
     pub query_fasta: PathBuf,
     pub hits: PathBuf,
@@ -60,32 +62,124 @@ pub struct WorkLayout {
 }
 
 impl WorkLayout {
-    /// Layout for a demultiplexed input table and a database FASTA.
+    /// Layout for a demultiplexed input table, a database FASTA and an
+    /// optional pseudogene FASTA.
     ///
-    /// The run directory is keyed by the MD5 of the input's absolute path;
-    /// database-derived files are named after the FASTA file name up to its
-    /// first dot. The paths only say where a cache lives; whether it is
-    /// still valid is decided by its [`Fingerprint`].
-    pub fn new(work_dir: &Path, input_tsv: &Path, database_fasta: &Path) -> Result<Self> {
-        let absolute_input = absolute(input_tsv)?;
-        let digest = Md5::digest(absolute_input.to_string_lossy().as_bytes());
-        let tag: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
+    /// The run directory is keyed by the MD5 of the absolute paths of all
+    /// three. The paths only say where a cache lives; whether it is still
+    /// valid is decided by its [`Fingerprint`].
+    pub fn new(
+        work_dir: &Path,
+        input_tsv: &Path,
+        database_fasta: &Path,
+        pseudo_fasta: Option<&Path>,
+    ) -> Result<Self> {
+        let mut hasher = Md5::new();
+        for path in [Some(input_tsv), Some(database_fasta), pseudo_fasta] {
+            let text = match path {
+                Some(path) => absolute(path)?.to_string_lossy().into_owned(),
+                None => String::new(),
+            };
+            hasher.update((text.len() as u64).to_le_bytes());
+            hasher.update(text.as_bytes());
+        }
+        let tag: String = hasher
+            .finalize()
+            .iter()
+            .take(8)
+            .map(|b| format!("{b:02x}"))
+            .collect();
         let run_dir = work_dir.join("blast").join(tag);
         let stem = stem_before_first_dot(database_fasta);
         Ok(WorkLayout {
             work_dir: work_dir.to_path_buf(),
             query_fasta: run_dir.join("query.fasta"),
             hits: run_dir.join("hits.blast.gz"),
+            affixes: run_dir.join(format!("{stem}.affixes")),
+            combined_fasta: run_dir.join(format!("{stem}-combined.fasta")),
+            extended_fasta: run_dir.join(format!("{stem}-combined-extended.fasta")),
             run_dir,
-            affixes: work_dir.join(format!("{stem}.affixes")),
-            combined_fasta: work_dir.join(format!("{stem}-combined.fasta")),
-            extended_fasta: work_dir.join(format!("{stem}-combined-extended.fasta")),
         })
     }
 
     pub fn create_directories(&self) -> Result<()> {
         std::fs::create_dir_all(&self.run_dir).map_err(|e| Error::io(&self.run_dir, e))
     }
+}
+
+/// Exclusive use of a run directory, for as long as the value lives.
+///
+/// Two runs on the same reads and database would write the same files.
+/// The second one is refused with a message instead of being left to
+/// corrupt the first. The lock is a file holding the process number; one
+/// left behind by a run that was killed is recognised and replaced.
+#[derive(Debug)]
+pub struct RunLock {
+    path: PathBuf,
+}
+
+impl RunLock {
+    pub fn acquire(run_dir: &Path) -> Result<Self> {
+        let path = run_dir.join("lock");
+        for _ in 0..2 {
+            let created = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path);
+            match created {
+                Ok(mut file) => {
+                    use std::io::Write as _;
+                    write!(file, "{}", std::process::id()).map_err(|e| Error::io(&path, e))?;
+                    return Ok(RunLock { path });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let owner = std::fs::read_to_string(&path)
+                        .ok()
+                        .and_then(|text| text.trim().parse::<u32>().ok());
+                    if owner.is_some_and(|pid| !process_is_running(pid)) {
+                        // Left behind by a run that did not end normally.
+                        let _ = std::fs::remove_file(&path);
+                        continue;
+                    }
+                    return Err(Error::invalid(format!(
+                        "Another discover blast run{} is working on the same reads and database \
+                         in {}. Wait for it to finish or give this run another --work-dir. \
+                         If no such run exists, delete {}.",
+                        owner.map_or(String::new(), |pid| format!(" (process {pid})")),
+                        run_dir.display(),
+                        path.display()
+                    )));
+                }
+                Err(e) => return Err(Error::io(&path, e)),
+            }
+        }
+        Err(Error::invalid(format!(
+            "Could not lock {}",
+            run_dir.display()
+        )))
+    }
+}
+
+impl Drop for RunLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Whether a process with this number exists. Where that cannot be found
+/// out, it is taken to exist.
+fn process_is_running(pid: u32) -> bool {
+    if pid == std::process::id() {
+        return true;
+    }
+    if cfg!(unix) {
+        return std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map_or(true, |status| status.success());
+    }
+    true
 }
 
 /// Digest of everything a cached file depends on.
@@ -171,29 +265,66 @@ pub fn replace_extension(path: &Path, extension: &str) -> PathBuf {
 mod tests {
     use super::*;
 
+    fn layout(input: &str, database: &str, pseudo: Option<&str>) -> WorkLayout {
+        WorkLayout::new(
+            Path::new("/w"),
+            Path::new(input),
+            Path::new(database),
+            pseudo.map(Path::new),
+        )
+        .unwrap()
+    }
+
     #[test]
-    fn layout_is_keyed_by_input_path_and_database_stem() {
-        let layout = WorkLayout::new(
-            Path::new("/w"),
-            Path::new("/data/a/../reads.tsv.gz"),
-            Path::new("/db/IGHV.v2.fasta"),
-        )
-        .unwrap();
-        // md5("/data/reads.tsv.gz") = 0d6b4d2b0aa5a0ba...
-        assert!(layout.run_dir.starts_with("/w/blast"));
-        assert_eq!(layout.run_dir.file_name().unwrap().len(), 16);
-        assert_eq!(layout.affixes, PathBuf::from("/w/IGHV.affixes"));
+    fn every_combination_of_reads_database_and_pseudogenes_has_its_own_directory() {
+        let v = layout("/data/a/../reads.tsv.gz", "/db/IGHV.v2.fasta", None);
+        assert!(v.run_dir.starts_with("/w/blast"));
+        assert_eq!(v.run_dir.file_name().unwrap().len(), 16);
+        // Everything derived from the run lives in its directory.
+        for file in [&v.hits, &v.query_fasta, &v.affixes, &v.combined_fasta] {
+            assert_eq!(file.parent(), Some(v.run_dir.as_path()));
+        }
         assert_eq!(
-            layout.extended_fasta,
-            PathBuf::from("/w/IGHV-combined-extended.fasta")
+            v.extended_fasta,
+            v.run_dir.join("IGHV-combined-extended.fasta")
         );
-        let same = WorkLayout::new(
-            Path::new("/w"),
-            Path::new("/data/reads.tsv.gz"),
-            Path::new("x.fa"),
-        )
-        .unwrap();
-        assert_eq!(layout.run_dir, same.run_dir);
+        // The same files, written differently: the same directory.
+        let again = layout("/data/reads.tsv.gz", "/db/x/../IGHV.v2.fasta", None);
+        assert_eq!(v.run_dir, again.run_dir);
+        // Other database, same-named database elsewhere, other reads,
+        // pseudogenes: other directories.
+        let others = [
+            layout("/data/reads.tsv.gz", "/db/IGHD.fasta", None),
+            layout("/data/reads.tsv.gz", "/other/IGHV.v2.fasta", None),
+            layout("/data/plate2.tsv.gz", "/db/IGHV.v2.fasta", None),
+            layout(
+                "/data/reads.tsv.gz",
+                "/db/IGHV.v2.fasta",
+                Some("/db/pseudo.fasta"),
+            ),
+        ];
+        let mut directories: Vec<&PathBuf> = others.iter().map(|l| &l.run_dir).collect();
+        directories.push(&v.run_dir);
+        directories.sort();
+        directories.dedup();
+        assert_eq!(directories.len(), 5);
+    }
+
+    #[test]
+    fn a_run_directory_is_used_by_one_run_at_a_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = RunLock::acquire(dir.path()).unwrap();
+        let refused = RunLock::acquire(dir.path()).unwrap_err().to_string();
+        assert!(refused.contains("Another discover blast run"), "{refused}");
+        drop(lock);
+        assert!(!dir.path().join("lock").exists());
+        // A lock left by a process that no longer exists is replaced.
+        std::fs::write(dir.path().join("lock"), "4294967294").unwrap();
+        let _lock = RunLock::acquire(dir.path()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("lock")).unwrap(),
+            std::process::id().to_string()
+        );
     }
 
     #[test]

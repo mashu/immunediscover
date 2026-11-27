@@ -178,6 +178,10 @@ src/
               columns of `discover blast`
   check/      recovery of held-out alleles and the evidence report
   bin/        ki_check.rs, the self-check binary
+tests/
+  pipeline.rs end-to-end runs of the program on a small synthetic plate:
+              demultiplex, search exact, analyze haplotype, discover blast
+              (the last needs BLAST+ and is skipped without it)
 docs/         the user guide (this site); mkdocs.yml at the top level
 ```
 

@@ -32,7 +32,7 @@ and whether the sequence segregates.
 | `relation` | What the sequence could be an artifact of, in this donor: `1 difference`, `2 differences`, `3 differences` or `4+ differences` from a more abundant sequence of the same gene, a `chimera` of two of them, or `top of gene` when nothing in the gene is more abundant. |
 | `donors` | Donors on the plate in which the sequence was seen at all, even as a single read. |
 | `carriers` | Donors on the plate holding at least a quarter of a copy of it. |
-| `segregates` | `true` when some donors carry the sequence and others do not, as alleles do. `false` when nearly every donor (90 % or more) holds it at the same level. Such a sequence is not a chance artifact, and is not shown to be an allele of this gene either: think of another locus, a duplicated gene or a systematic artifact. |
+| `segregates` | `true` when some donors carry the sequence and others do not, as alleles do. `false` when nearly every donor (90 % or more) holds it at the same level. Empty when the run has fewer than 10 donors, where every sequence would be in "nearly all" of them. Such a sequence is not a chance artifact, and is not shown to be an allele of this gene either: think of another locus, a duplicated gene or a systematic artifact. |
 | `usual_parent_ratio` | For a sequence that most donors show: its usual amount relative to the more abundant sequence it resembles (0.01 = 1 %). Empty when most donors do not show it. |
 
 ### Reading a row

@@ -9,6 +9,8 @@ use crate::info;
 use crate::io::compress;
 use crate::io::path::stem_before_first_dot;
 
+use super::workdir::{content_digest, Fingerprint};
+
 /// Columns requested from `blastn -outfmt 6`, in order.
 pub const COLUMNS: [&str; 19] = [
     "qseqid", "sseqid", "pident", "nident", "length", "mismatch", "gapopen", "qcovs", "qcovhsp",
@@ -83,12 +85,13 @@ pub fn ensure_blast_db(fasta: &Path) -> Result<PathBuf> {
         .join(stem_before_first_dot(fasta));
     let mut index = db.as_os_str().to_os_string();
     index.push(".nin");
-    let modified = |path: &Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
-    if let (Some(index_time), Some(fasta_time)) = (modified(Path::new(&index)), modified(fasta)) {
-        if index_time >= fasta_time {
-            info!("Using existing BLAST database {}", db.display());
-            return Ok(db);
-        }
+    // Built from exactly this FASTA? File times are not trusted: they are
+    // too coarse on some file systems to tell two quick runs apart.
+    let index = PathBuf::from(index);
+    let fingerprint = Fingerprint::of(&[content_digest(fasta)?]);
+    if fingerprint.matches(&index) {
+        info!("Using existing BLAST database {}", db.display());
+        return Ok(db);
     }
     info!(
         "Building BLAST database from {} (enables multithreaded blastn)",
@@ -104,6 +107,7 @@ pub fn ensure_blast_db(fasta: &Path) -> Result<PathBuf> {
     if !status.success() {
         return Err(Error::tool("makeblastdb", format!("exited with {status}")));
     }
+    fingerprint.record(&index)?;
     Ok(db)
 }
 
@@ -155,9 +159,17 @@ pub fn blastn(query: &Path, database: &Path, output_gz: &Path, extra_args: &str)
         .spawn()
         .map_err(|e| Error::tool("blastn", format!("could not be started: {e}")))?;
     let mut stdout = child.stdout.take().expect("stdout was requested as a pipe");
-    let mut sink = compress::create(output_gz, true)?;
-    std::io::copy(&mut stdout, &mut sink).map_err(|e| Error::io(output_gz, e))?;
-    drop(sink);
+    let copied = compress::create(output_gz, true).and_then(|mut sink| {
+        std::io::copy(&mut stdout, &mut sink).map_err(|e| Error::io(output_gz, e))
+    });
+    if let Err(error) = copied {
+        // The result cannot be written (disk full?): do not leave blastn
+        // running, nor half a result behind.
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(output_gz);
+        return Err(error);
+    }
     let status = child
         .wait()
         .map_err(|e| Error::tool("blastn", e.to_string()))?;

@@ -18,6 +18,9 @@ pub const COPY_LIKE: f64 = 0.25;
 pub const MULTI_COPY: f64 = 2.8;
 /// Share of the donors from which a sequence counts as not segregating.
 pub const UBIQUITOUS_SHARE: f64 = 0.9;
+/// Donors a plate needs before anything is said about segregation. With a
+/// handful of donors every sequence is in "nearly all" of them.
+pub const MIN_PLATE_DONORS: usize = 10;
 /// Two ratios to the parent within this factor are the same level.
 const SAME_LEVEL: f64 = 3.0;
 /// Dosage from which a donor counts as carrying the parent.
@@ -88,8 +91,9 @@ pub fn set_context(observations: &mut [Observation], n_donors: usize) {
         o.evidence.tracking = tracking;
         o.evidence.recurrent_ratio = recurrent;
         o.evidence.steady = steady;
-        o.evidence.ubiquitous = carriers as f64 >= UBIQUITOUS_SHARE * n_donors as f64
-            || steady.is_some_and(|s| s >= UBIQUITOUS_SHARE);
+        o.evidence.ubiquitous = n_donors >= MIN_PLATE_DONORS
+            && (carriers as f64 >= UBIQUITOUS_SHARE * n_donors as f64
+                || steady.is_some_and(|s| s >= UBIQUITOUS_SHARE));
     }
 }
 
@@ -99,11 +103,15 @@ mod tests {
     use crate::evidence::parents;
     use crate::evidence::testing::observation;
 
-    /// Five donors all carry the parent (100 reads, dosage 1). `hotspot`
+    /// Ten donors all carry the parent (100 reads, dosage 1). `hotspot`
     /// follows it at 5 % everywhere; `allele` is carried by two donors only.
     fn plate() -> Vec<Observation> {
+        plate_of(10)
+    }
+
+    fn plate_of(donors: usize) -> Vec<Observation> {
         let mut observations = Vec::new();
-        for donor in 0..5 {
+        for donor in 0..donors {
             let mut add = |sequence: &str, count: u64| {
                 let mut o = observation(donor, "A", sequence, count);
                 o.evidence.dosage = Some(count as f64 / 100.0);
@@ -116,8 +124,16 @@ mod tests {
             }
         }
         parents::assign(&mut observations);
-        set_context(&mut observations, 5);
+        set_context(&mut observations, donors);
         observations
+    }
+
+    #[test]
+    fn a_handful_of_donors_says_nothing_about_segregation() {
+        // The parent is in all five donors, as it would be in any five.
+        let observations = plate_of(5);
+        assert_eq!(observations[0].evidence.carriers, 5);
+        assert!(observations.iter().all(|o| !o.evidence.ubiquitous));
     }
 
     #[test]
@@ -146,11 +162,11 @@ mod tests {
             .find(|o| o.sequence == "AAAAAAAG")
             .unwrap();
         assert_eq!(allele.evidence.carriers, 2);
-        assert_eq!(allele.evidence.tracking, Some(0.4));
+        assert_eq!(allele.evidence.tracking, Some(0.2));
         // In most of the other donors with the parent it is not there at all.
         assert_eq!(allele.evidence.recurrent_ratio, Some(0.0));
-        // One of the four other donors holds it at the same level.
-        assert_eq!(allele.evidence.steady, Some(0.25));
+        // One of the nine other donors holds it at the same level.
+        assert_eq!(allele.evidence.steady, Some(1.0 / 9.0));
         assert!(!allele.evidence.ubiquitous);
         assert!(!is_private(allele));
     }
