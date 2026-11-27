@@ -4,7 +4,6 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
-use std::time::Instant;
 
 use super::runner::{blastn, ensure_blast_db, verify_blastn_version, COLUMNS};
 use super::workdir::{content_digest, file_identity, replace_extension, Fingerprint, WorkLayout};
@@ -14,6 +13,7 @@ use crate::error::{Error, Result};
 use crate::frame::{Column, Frame, Value};
 use crate::io::compress;
 use crate::io::tsv::{read_table, write_table, ReadOptions, WriteOptions};
+use crate::logging::with_thousands;
 use crate::seq::dna::reverse_complement;
 use crate::seq::gene_of;
 use crate::seq::search::find_first;
@@ -48,6 +48,10 @@ pub struct AssignSettings {
     pub min_edge: i64,
     /// Minimum alignment length relative to the subject length.
     pub min_subject_coverage: f64,
+    /// Most differences between a read and a database sequence that the
+    /// later steps can still accept; `None` if they set no such limit.
+    /// The built-in aligner does not look further.
+    pub max_differences: Option<usize>,
     /// Also write intermediate tables into the run directory.
     pub verbose: bool,
     /// Ignore a cached BLAST result.
@@ -142,8 +146,9 @@ fn oriented_segment(segment: &str, read: &str, minus_strand: bool) -> Option<(St
     Some((segment.to_string(), before, after))
 }
 
-/// Smallest share of equal bases at which the built-in aligner reports a
-/// match. Low on purpose: `--maxdist` decides later what is too far.
+/// The built-in aligner matches a read to a database sequence with at
+/// most `1 - BUILTIN_MIN_IDENTITY` differences per base. Low on purpose:
+/// `--maxdist` decides what is too far ([`AssignSettings::max_differences`]).
 const BUILTIN_MIN_IDENTITY: f64 = 0.7;
 
 /// Best BLAST hit of every read: run `blastn` (or reuse its cached result)
@@ -235,17 +240,22 @@ fn builtin_best_hits(
     let search = Settings {
         min_identity: BUILTIN_MIN_IDENTITY,
         min_coverage: settings.min_subject_coverage,
+        max_differences: settings.max_differences,
         ..Settings::default()
     };
-    let started = Instant::now();
     let texts: Vec<&str> = sequences.iter().map(String::as_str).collect();
+    info!(
+        "Built-in aligner: {} reads against {} sequences ({} groups of nearly equal sequences)",
+        with_thousands(texts.len()),
+        with_thousands(database.subjects().len()),
+        with_thousands(database.groups())
+    );
     let hits = database.search(&texts, &search);
     info!(
-        "Built-in aligner: {} of {} reads matched ({} distinct read sequences, {:.1} seconds)",
-        hits.matched(),
-        hits.len(),
-        hits.distinct(),
-        started.elapsed().as_secs_f64()
+        "Built-in aligner: {} of {} reads matched ({} distinct read sequences)",
+        with_thousands(hits.matched()),
+        with_thousands(hits.len()),
+        with_thousands(hits.distinct())
     );
     if hits.matched() == 0 {
         return Err(Error::invalid(

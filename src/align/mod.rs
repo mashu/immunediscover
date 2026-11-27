@@ -2,6 +2,7 @@
 
 pub mod banded;
 pub mod distance;
+pub mod edits;
 pub mod gotoh;
 pub mod needleman_wunsch;
 pub mod search;

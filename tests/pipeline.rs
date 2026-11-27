@@ -499,6 +499,8 @@ fn the_builtin_aligner_discovers_the_same_alleles_without_blast() {
         ],
     );
     assert!(printed(&output).contains("Built-in aligner"));
+    // The time the alignment took and its speed are reported.
+    assert!(printed(&output).contains("reads per second"));
     // The presets are applied, but nothing of BLAST is used or reported.
     assert!(printed(&output).contains("Applying V preset length"));
     for word in ["blastn", "megablast", "preset args"] {

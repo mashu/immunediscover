@@ -141,10 +141,16 @@ at the very end of an allele is counted and the sequence is reported at
 full length. This matters most when few or no surrounding bases are
 recorded (`--forward 0 --reverse 0`) and for short genes.
 
-The built-in aligner needs no installation, gives the same result on
-every computer, and is faster, most of all for D genes. Its results are
-not cached: every run aligns again. [The built-in aligner](align.md)
+The built-in aligner needs no installation and gives the same result on
+every computer. It shows its progress, the reads handled per second and
+the time left while it runs, and the total time at the end. Its results
+are not cached: every run aligns again. [The built-in aligner](align.md)
 describes how it works.
+
+It gives every read to the nearest allele (fewest differences per base).
+Reads that are too far from every allele to be reported are not followed
+further: more differences than `--maxdist` allows in the allele plus what
+`--minquality` allows in the surroundings.
 
 ## The output table
 

@@ -268,15 +268,30 @@ See the header of `parity/runall.sh` for the environment variables.
 
 ## The built-in aligner
 
-`align/gotoh.rs` aligns a subject from end to end inside a read (free
-read ends, affine gaps), in a band of diagonals. Its scores are tested
-against the unbanded Needleman-Wunsch of `align/needleman_wunsch.rs` on
-random sequences. `align/search.rs` chooses the subjects to align from
-shared 10-mers and is tested against aligning every subject in whole.
-A subject is skipped only when its shared words prove that it cannot
-reach the identity of the best alignment so far: with every `step`-th
-word of the read looked up, one difference removes at most
-`ceil(10 / step)` shared words.
+`align/search.rs` finds the nearest subject of a read: fewest
+differences per base, bases beyond the read end weighted
+`matched / (matched - mismatched)`. It needs no alignment for that:
+
+- `align/seeds.rs`: 10-mer index over groups of subjects of one length
+  within 8 mismatches of the first member; votes per group and diagonal.
+  A group is passed over when its votes prove it too far: with every
+  `step`-th word of the read looked up, one difference removes at most
+  `ceil(10 / step)` shared words. Beyond the twelve best-voted groups, a
+  group also needs a quarter of the votes expected at the accepted
+  identity.
+- `align/edits.rs`: mismatch count with cutoff, and the least number of
+  differences by furthest-reaching diagonals (Landau-Vishkin), with a
+  limit and with subject bases allowed to hang over the read ends. The
+  first member of a group is counted with `limit + radius`; if that
+  fails, no member is within `limit`.
+- `align/gotoh.rs`: banded affine-gap alignment of a subject inside a
+  read (free read ends, optional overhang), run once for the nearest
+  subject. Its scores are tested against the unbanded Needleman-Wunsch
+  of `align/needleman_wunsch.rs`.
+
+The search is tested against a plain dynamic programme over every
+subject and both strands (`the_nearest_allele_is_the_one_the_plain_
+programme_finds`; `IMMUNEDISCOVER_STRESS=50000` runs it longer).
 
 `discover blast --aligner builtin` turns the hits into the columns BLAST
 would give (`assign::builtin_best_hits`), so that everything after the
@@ -288,14 +303,18 @@ assignment is the same code for both aligners. `ki-check
 281 000 reads, 2 cores: demultiplex 3.9 s, exact search 1.1–1.4 s,
 heptamer 2.4 s, BLAST discovery 57 s (48 s of it inside `blastn`).
 
-Assignment of reads on simulated plates, 2 cores, same discovery result
-with both aligners:
+Assignment of reads, 2 cores. In all three rows the discovery result is
+the same table with both aligners (the D plate apart from read counts,
+which are higher with the built-in aligner: BLAST cuts some matches short
+of the required length).
 
 | Plate | Reads | `blastn` | Built-in aligner |
 |---|---|---|---|
-| V: 63 genes in 7 families, 256 alleles, 35 new alleles in 48 donors | 151 200 | 44 s | 13 s |
-| D: 25 genes of 11 to 37 bases, 20 new alleles in 48 donors | 96 000 | 187 s | 2.2 s |
+| V, invented genes: 63 genes in 7 families, 256 alleles | 151 200 | 44 s | 4.1 s |
+| D, invented genes: 25 genes of 11 to 37 bases | 96 000 | 187 s | 0.6 s |
+| V, the human IGHV set enlarged to 1 300 alleles, a fifth of the reads 12 to 30 % away from every allele | 100 000 | 350 s | 12.8 s |
 
-Reads far from every allele cost the built-in aligner about ten times
-more than reads of a known gene, because few candidates can be ruled out
-by their shared words.
+Reads within one mismatch of an allele cost least. Reads further away
+cost more with every difference, up to the limit beyond which they are
+not followed (`max_useful_differences` in `discover blast`,
+`--min-identity` in `align`).

@@ -7,7 +7,6 @@
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use crate::align::gotoh::Scoring;
 use crate::align::search::{Database, Hit, Hits, Settings};
@@ -16,6 +15,7 @@ use crate::info;
 use crate::io::compress;
 use crate::io::fasta::read_fasta;
 use crate::io::tsv::read_tsv;
+use crate::logging::with_thousands;
 
 /// Layout of the output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -264,21 +264,20 @@ pub fn run(params: &AlignParams) -> Result<()> {
     let database = load_database(&params.database)?;
     let reads = read_reads(&params.reads)?;
     info!(
-        "Aligning {} reads from {} to {} sequences from {}",
-        reads.sequences.len(),
+        "Aligning {} reads from {} to {} sequences from {} ({} groups of nearly equal sequences)",
+        with_thousands(reads.sequences.len()),
         params.reads.display(),
-        database.subjects().len(),
-        params.database.display()
+        with_thousands(database.subjects().len()),
+        params.database.display(),
+        with_thousands(database.groups())
     );
-    let started = Instant::now();
     let sequences: Vec<&str> = reads.sequences.iter().map(String::as_str).collect();
     let hits = database.search(&sequences, settings);
     info!(
-        "{} of {} reads matched ({} distinct read sequences aligned in {:.1} seconds)",
-        hits.matched(),
-        hits.len(),
-        hits.distinct(),
-        started.elapsed().as_secs_f64()
+        "{} of {} reads matched an allele ({} distinct read sequences)",
+        with_thousands(hits.matched()),
+        with_thousands(hits.len()),
+        with_thousands(hits.distinct())
     );
     write_hits(&params.output, &reads, &hits, &database, params.format)?;
     info!("Matches written to {}", params.output.display());

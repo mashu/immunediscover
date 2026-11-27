@@ -52,6 +52,11 @@ struct Place {
 }
 
 /// Every word of a set of sequences with the places where it occurs.
+///
+/// Sequences that are nearly the same (the alleles of a gene) are indexed
+/// as one group: a word found at the same position in several of them is
+/// noted once. A read then votes for the group, with at least as many
+/// votes as any single member would get.
 #[derive(Debug)]
 pub struct WordIndex {
     /// `places[starts[w]..starts[w + 1]]` are the places of word `w`.
@@ -62,19 +67,27 @@ pub struct WordIndex {
 }
 
 impl WordIndex {
-    /// Index the given sequences; `None` entries are left out but keep
-    /// their number.
-    pub fn new<'a>(sequences: impl Iterator<Item = Option<&'a [u8]>> + Clone) -> Self {
+    /// Index groups of sequences; the sequences of a group have the same
+    /// length and are numbered by their group.
+    pub fn new(groups: &[Vec<&[u8]>]) -> Self {
+        // Per group: the distinct (word, position) pairs of its members.
+        let distinct: Vec<Vec<(u32, u32)>> = groups
+            .iter()
+            .map(|members| {
+                let mut found: Vec<(u32, u32)> = members
+                    .iter()
+                    .flat_map(|sequence| {
+                        words(sequence).map(|(position, word)| (word, position as u32))
+                    })
+                    .collect();
+                found.sort_unstable();
+                found.dedup();
+                found
+            })
+            .collect();
         let mut starts = vec![0u32; WORDS + 1];
-        let mut subjects = 0;
-        let mut longest = 0;
-        for sequence in sequences.clone() {
-            subjects += 1;
-            let Some(sequence) = sequence else { continue };
-            longest = longest.max(sequence.len());
-            for (_, word) in words(sequence) {
-                starts[word as usize + 1] += 1;
-            }
+        for &(word, _) in distinct.iter().flatten() {
+            starts[word as usize + 1] += 1;
         }
         for word in 0..WORDS {
             starts[word + 1] += starts[word];
@@ -87,21 +100,26 @@ impl WordIndex {
             };
             starts[WORDS] as usize
         ];
-        for (subject, sequence) in sequences.enumerate() {
-            let Some(sequence) = sequence else { continue };
-            for (position, word) in words(sequence) {
+        for (group, found) in distinct.iter().enumerate() {
+            for &(word, position) in found {
                 let slot = &mut next[word as usize];
                 places[*slot as usize] = Place {
-                    subject: subject as u32,
-                    position: position as u32,
+                    subject: group as u32,
+                    position,
                 };
                 *slot += 1;
             }
         }
+        let longest = groups
+            .iter()
+            .flatten()
+            .map(|sequence| sequence.len())
+            .max()
+            .unwrap_or(0);
         WordIndex {
             starts,
             places,
-            subjects,
+            subjects: groups.len(),
             longest,
         }
     }
@@ -118,9 +136,10 @@ impl WordIndex {
     }
 }
 
-/// A subject that shares words with a read.
+/// A group of subjects that shares words with a read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Candidate {
+    /// Number of the group in the index.
     pub subject: usize,
     /// Shared words, on any diagonal.
     pub votes: u32,
@@ -230,7 +249,8 @@ mod tests {
     use super::*;
 
     fn index(sequences: &[&[u8]]) -> WordIndex {
-        WordIndex::new(sequences.iter().map(|s| Some(*s)))
+        let groups: Vec<Vec<&[u8]>> = sequences.iter().map(|s| vec![*s]).collect();
+        WordIndex::new(&groups)
     }
 
     #[test]
@@ -278,11 +298,21 @@ mod tests {
     }
 
     #[test]
-    fn subjects_left_out_of_the_index_keep_their_number() {
+    fn a_group_gets_the_votes_of_its_best_member_or_more() {
         let gene: &[u8] = b"ACGGTCATTGCAGGCTTAACGTTAGCCATGCAAGTCCGATAGGCTTAA";
-        let index = WordIndex::new([None, Some(gene)].into_iter());
-        let mut candidates = Vec::new();
-        Votes::default().collect(&index, gene, 1, &mut candidates);
-        assert_eq!(candidates[0].subject, 1);
+        let mut allele = gene.to_vec();
+        allele[20] = b'T';
+        let alone = index(&[gene]);
+        let together = WordIndex::new(&[vec![gene, allele.as_slice()]]);
+        let mut votes = Votes::default();
+        for read in [gene, allele.as_slice()] {
+            let (mut single, mut grouped) = (Vec::new(), Vec::new());
+            votes.collect(&alone, read, 1, &mut single);
+            votes.collect(&together, read, 1, &mut grouped);
+            assert_eq!(grouped.len(), 1);
+            // Either member, read whole, shares all its words with the group.
+            assert_eq!(grouped[0].votes as usize, gene.len() - WORD + 1);
+            assert!(grouped[0].votes >= single[0].votes);
+        }
     }
 }
