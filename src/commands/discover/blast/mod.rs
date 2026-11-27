@@ -53,8 +53,8 @@ pub struct BlastParams {
     /// extension, before trimming).
     pub min_length: usize,
     pub edge: i64,
-    pub blast_args: String,
-    /// Which program compares the reads with the database.
+    /// Which program compares the reads with the database (with the
+    /// arguments for `blastn`, if it is BLAST).
     pub aligner: Aligner,
     pub overwrite: bool,
     pub forward_extension: usize,
@@ -352,10 +352,7 @@ fn allele_names(
 pub fn run(params: &BlastParams) -> Result<()> {
     info!(
         "Discovery with read assignment by {}",
-        match params.aligner {
-            Aligner::Blast => "BLAST",
-            Aligner::Builtin => "the built-in aligner",
-        }
+        params.aligner.label()
     );
     let work_dir = workdir::resolve_work_dir(&params.work_dir)?;
     std::fs::create_dir_all(&work_dir).map_err(|e| Error::io(&work_dir, e))?;
@@ -441,11 +438,10 @@ pub fn run(params: &BlastParams) -> Result<()> {
         blast_fasta,
         &layout,
         &AssignSettings {
-            aligner: params.aligner,
+            aligner: params.aligner.clone(),
             max_distance: params.max_distance,
             min_edge: params.edge,
             min_subject_coverage: params.subject_coverage,
-            blast_args: params.blast_args.clone(),
             verbose: params.verbose,
             overwrite: params.overwrite,
         },

@@ -27,7 +27,7 @@ use immunediscover::check::allele_recovery::{
 use immunediscover::check::evidence_report::{
     classify, format_evidence_report, Plate, Thresholds, Truth,
 };
-use immunediscover::cli::presets::{resolve, Preset, PresetValues, Resolved};
+use immunediscover::cli::presets::{resolve, resolve_blast_args, Preset, PresetValues, Resolved};
 use immunediscover::commands::discover::blast::flank_split::unfiltered_sidecar;
 use immunediscover::commands::discover::blast::{self, Aligner, BlastParams};
 use immunediscover::error::{Error, Result};
@@ -345,36 +345,32 @@ fn split_one(db_dir: &Path, name: &str) -> Result<()> {
 /// alleles across extension variants (e.g. IGHV1-46*01_S9407 best
 /// `full_count` 15), so V uses 15 while keeping the `full_count` filter.
 fn ki_resolved(kind: GeneKind) -> Resolved {
+    let explicit = match kind {
+        GeneKind::V => PresetValues {
+            min_full_ratio: Some(0.083102),
+            min_full_count: Some(15),
+            length: Some(299),
+            min_core_coverage: Some(0.98),
+            max_distance: Some(10),
+            min_quality: Some(0.5),
+            ..PresetValues::default()
+        },
+        GeneKind::D | GeneKind::J => PresetValues {
+            forward: Some(20),
+            reverse: Some(20),
+            min_full_ratio: Some(0.01),
+            min_full_count: Some(10),
+            ..PresetValues::default()
+        },
+    };
+    resolve(Some(preset_of(kind)), explicit)
+}
+
+fn preset_of(kind: GeneKind) -> Preset {
     match kind {
-        GeneKind::V => resolve(
-            Some(Preset::V),
-            PresetValues::<String> {
-                min_full_ratio: Some(0.083102),
-                min_full_count: Some(15),
-                length: Some(299),
-                min_core_coverage: Some(0.98),
-                max_distance: Some(10),
-                min_quality: Some(0.5),
-                ..PresetValues::default()
-            },
-        ),
-        GeneKind::D | GeneKind::J => {
-            let preset = match kind {
-                GeneKind::D => Preset::D,
-                GeneKind::J => Preset::J,
-                GeneKind::V => unreachable!(),
-            };
-            resolve(
-                Some(preset),
-                PresetValues::<String> {
-                    forward: Some(20),
-                    reverse: Some(20),
-                    min_full_ratio: Some(0.01),
-                    min_full_count: Some(10),
-                    ..PresetValues::default()
-                },
-            )
-        }
+        GeneKind::V => Preset::V,
+        GeneKind::D => Preset::D,
+        GeneKind::J => Preset::J,
     }
 }
 
@@ -391,11 +387,12 @@ fn run_discover(paths: &GenePaths, args: &Args) -> Result<()> {
         max_distance: resolved.max_distance,
         min_length: resolved.length,
         edge: resolved.edge,
-        blast_args: resolved.blast_args,
         aligner: if args.builtin_aligner {
             Aligner::Builtin
         } else {
-            Aligner::Blast
+            Aligner::Blast {
+                args: resolve_blast_args(Some(preset_of(paths.kind)), None),
+            }
         },
         overwrite: args.overwrite,
         forward_extension: resolved.forward,

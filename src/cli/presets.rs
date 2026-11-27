@@ -53,10 +53,13 @@ impl fmt::Display for Preset {
 }
 
 /// Values for the options a preset can change; `None` leaves an option
-/// alone. Used both for what a preset sets (`PresetValues`) and for what
-/// was given explicitly on the command line (`PresetValues<String>`).
+/// alone. Used both for what a preset sets and for what was given
+/// explicitly on the command line.
+///
+/// These options apply whichever program compares reads and alleles.
+/// The settings of BLAST itself are separate ([`resolve_blast_args`]).
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct PresetValues<S = &'static str> {
+pub struct PresetValues {
     pub forward: Option<usize>,
     pub reverse: Option<usize>,
     pub min_full_ratio: Option<f64>,
@@ -67,7 +70,6 @@ pub struct PresetValues<S = &'static str> {
     pub subject_coverage: Option<f64>,
     pub min_quality: Option<f64>,
     pub min_core_coverage: Option<f64>,
-    pub blast_args: Option<S>,
 }
 
 impl Preset {
@@ -84,7 +86,6 @@ impl Preset {
                 min_full_count: Some(5),
                 min_quality: Some(0.62),
                 min_core_coverage: Some(0.50),
-                blast_args: Some("-task megablast -subject_besthit -num_alignments 5 -qcov_hsp_perc 50"),
                 ..PresetValues::default()
             },
             // 40 nt of context on each side splits the reads of a D allele
@@ -101,9 +102,6 @@ impl Preset {
                 edge: Some(10),
                 subject_coverage: Some(0.25),
                 min_quality: Some(0.5),
-                blast_args: Some(
-                    "-task blastn -word_size 7 -xdrop_ungap 40 -xdrop_gap 40 -subject_besthit -num_alignments 10 -qcov_hsp_perc 5",
-                ),
                 ..PresetValues::default()
             },
             Preset::J => PresetValues {
@@ -113,9 +111,20 @@ impl Preset {
                 length: Some(10),
                 max_distance: Some(10),
                 min_full_count: Some(10),
-                blast_args: Some("-task megablast -subject_besthit -num_alignments 5 -qcov_hsp_perc 10"),
                 ..PresetValues::default()
             },
+        }
+    }
+
+    /// The `blastn` settings of the preset. Short genes need a search
+    /// for short words; they are of no use to the built-in aligner.
+    pub fn blast_args(self) -> &'static str {
+        match self {
+            Preset::V => "-task megablast -subject_besthit -num_alignments 5 -qcov_hsp_perc 50",
+            Preset::D => {
+                "-task blastn -word_size 7 -xdrop_ungap 40 -xdrop_gap 40 -subject_besthit -num_alignments 10 -qcov_hsp_perc 5"
+            }
+            Preset::J => "-task megablast -subject_besthit -num_alignments 5 -qcov_hsp_perc 10",
         }
     }
 }
@@ -133,7 +142,6 @@ pub struct Resolved {
     pub subject_coverage: f64,
     pub min_quality: f64,
     pub min_core_coverage: f64,
-    pub blast_args: String,
 }
 
 /// Precedence for one option: explicit value, then preset, then default.
@@ -166,11 +174,24 @@ fn choose<T: fmt::Display>(
 ///
 /// An option given on the command line always wins, whatever its value;
 /// a preset only fills in options that were not given.
-pub fn resolve(preset: Option<Preset>, explicit: PresetValues<String>) -> Resolved {
+pub fn resolve(preset: Option<Preset>, explicit: PresetValues) -> Resolved {
     resolve_with(preset, explicit, true)
 }
 
-fn resolve_with(preset: Option<Preset>, explicit: PresetValues<String>, log: bool) -> Resolved {
+/// The settings passed to `blastn`: those given with `--args`, else those
+/// of the preset, else the default. Only a run that uses BLAST asks for
+/// them, so only such a run reports them.
+pub fn resolve_blast_args(preset: Option<Preset>, explicit: Option<String>) -> String {
+    choose(
+        (preset, true),
+        "args",
+        explicit,
+        preset.map(|p| p.blast_args().to_string()),
+        defaults::BLAST_ARGS.to_string(),
+    )
+}
+
+fn resolve_with(preset: Option<Preset>, explicit: PresetValues, log: bool) -> Resolved {
     let v = preset.map(Preset::values).unwrap_or_default();
     let preset = (preset, log);
     Resolved {
@@ -238,13 +259,6 @@ fn resolve_with(preset: Option<Preset>, explicit: PresetValues<String>, log: boo
             v.min_core_coverage,
             defaults::MIN_CORE_COVERAGE,
         ),
-        blast_args: choose(
-            preset,
-            "args",
-            explicit.blast_args,
-            v.blast_args.map(str::to_string),
-            defaults::BLAST_ARGS.to_string(),
-        ),
     }
 }
 
@@ -279,8 +293,15 @@ pub fn describe_presets() -> String {
         }
         text.push('\n');
     }
-    for (label, column) in ["default", "-g V", "-g D", "-g J"].iter().zip(&resolved) {
-        text.push_str(&format!("--args ({label}): {}\n", column.blast_args));
+    text.push_str("\nSettings of blastn (--args; not used with --aligner builtin):\n");
+    let blast_args = [
+        ("default", defaults::BLAST_ARGS),
+        ("-g V", Preset::V.blast_args()),
+        ("-g D", Preset::D.blast_args()),
+        ("-g J", Preset::J.blast_args()),
+    ];
+    for (label, args) in blast_args {
+        text.push_str(&format!("  {label}: {args}\n"));
     }
     text
 }
@@ -300,7 +321,7 @@ mod tests {
         assert_eq!((r.forward, r.reverse), (40, 40));
         assert_eq!(r.edge, 10);
         assert_eq!(r.length, 5);
-        assert!(r.blast_args.contains("-word_size 7"));
+        assert!(resolve_blast_args(Some(Preset::D), None).contains("-word_size 7"));
         assert_eq!(r.min_core_coverage, defaults::MIN_CORE_COVERAGE);
     }
 
@@ -332,7 +353,13 @@ mod tests {
     fn without_a_preset_defaults_apply() {
         let r = resolve(None, PresetValues::default());
         assert_eq!(r.length, defaults::LENGTH);
-        assert_eq!(r.blast_args, defaults::BLAST_ARGS);
-        assert!(describe_presets().contains("--min-corecov"));
+        assert_eq!(resolve_blast_args(None, None), defaults::BLAST_ARGS);
+        assert_eq!(
+            resolve_blast_args(Some(Preset::V), Some("-task blastn".to_string())),
+            "-task blastn"
+        );
+        let presets = describe_presets();
+        assert!(presets.contains("--min-corecov"));
+        assert!(presets.contains("not used with --aligner builtin"));
     }
 }
