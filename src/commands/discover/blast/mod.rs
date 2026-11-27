@@ -24,7 +24,7 @@ use rayon::prelude::*;
 use self::affixes::ExtensionSettings;
 pub use self::assign::AssignSettings;
 use self::trim::{trim_and_align, AlignmentStats};
-use self::workdir::{content_digest, file_identity, Fingerprint, WorkLayout};
+use self::workdir::{content_digest, file_identity, Fingerprint, RunLock, WorkLayout};
 use crate::commands::variants::{
     allele_counts, rank_variants, ratio_to_gene_max, sort_variants, VariantColumns,
 };
@@ -355,8 +355,18 @@ pub fn run(params: &BlastParams) -> Result<()> {
         "Work directory (caches, intermediates): {}",
         work_dir.display()
     );
-    let layout = WorkLayout::new(&work_dir, &params.input, &params.fasta)?;
+    let layout = WorkLayout::new(
+        &work_dir,
+        &params.input,
+        &params.fasta,
+        params.pseudo.as_deref(),
+    )?;
+    layout.create_directories()?;
+    // Held until the run ends: a second run on the same reads and
+    // database would write the same intermediate files.
+    let _lock = RunLock::acquire(&layout.run_dir)?;
     let db = load_subjects(&params.fasta)?;
+    let all_reads = read_tsv(&params.input)?;
     warn_if_short("Forward", params.forward_extension);
     warn_if_short("Reverse", params.reverse_extension);
 
@@ -386,8 +396,7 @@ pub fn run(params: &BlastParams) -> Result<()> {
                 "Extending gene sequences by {} forward and {} reverse nucleotides",
                 params.forward_extension, params.reverse_extension
             );
-            let reads = read_tsv(&params.input)?;
-            let sequences: Vec<String> = reads
+            let sequences: Vec<String> = all_reads
                 .column("genomic_sequence")?
                 .iter()
                 .map(|v| v.julia_string())
@@ -420,6 +429,7 @@ pub fn run(params: &BlastParams) -> Result<()> {
 
     let mut clusters = assign::blast_discover(
         &params.input,
+        &all_reads,
         blast_fasta,
         &layout,
         &AssignSettings {

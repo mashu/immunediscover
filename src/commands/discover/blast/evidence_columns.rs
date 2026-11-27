@@ -8,8 +8,10 @@
 use std::collections::HashMap;
 
 use crate::error::Result;
+use crate::evidence::plate::MIN_PLATE_DONORS;
 use crate::evidence::{self, Kind, Observation};
 use crate::frame::{Column, Frame};
+use crate::warn;
 
 /// Names of the columns added, in output order.
 pub const COLUMNS: [&str; 8] = [
@@ -59,6 +61,16 @@ pub fn add_evidence_columns(reported: &mut Frame, all_clusters: &Frame) -> Resul
     let (mut observations, donors) =
         evidence::observations::from_clusters_with_donors(all_clusters)?;
     evidence::assess(&mut observations, donors.len());
+    // Segregation is a statement about a cohort.
+    let cohort = donors.len() >= MIN_PLATE_DONORS;
+    if !cohort {
+        warn!(
+            "Only {} donor(s) in this run: `segregates` is left empty, and the evidence \
+             columns rest on little, because the rates behind them are learned from the \
+             donors analysed together.",
+            donors.len()
+        );
+    }
 
     let mut seen_in: HashMap<&str, usize> = HashMap::new();
     let mut by_key: HashMap<(&str, &str, &str), &Observation> = HashMap::new();
@@ -112,7 +124,7 @@ pub fn add_evidence_columns(reported: &mut Frame, all_clusters: &Frame) -> Resul
         "segregates",
         Column::Bool(
             rows.iter()
-                .map(|o| o.map(|o| !o.evidence.ubiquitous))
+                .map(|o| o.filter(|_| cohort).map(|o| !o.evidence.ubiquitous))
                 .collect(),
         ),
     )?;
@@ -127,14 +139,18 @@ pub fn add_evidence_columns(reported: &mut Frame, all_clusters: &Frame) -> Resul
 mod tests {
     use super::*;
 
-    /// Six donors with 200 reads of the allele of gene A; donor 1 also has
-    /// 100 reads of a variant, donor 2 three reads of it.
+    /// Twelve donors with 200 reads of the allele of gene A; donor 1 also
+    /// has 100 reads of a variant, donor 2 three reads of it.
     fn clusters() -> Frame {
+        clusters_of(12)
+    }
+
+    fn clusters_of(donors: i64) -> Frame {
         let mut wells = Vec::new();
         let mut sequences = Vec::new();
         let mut counts = Vec::new();
         let mut distances = Vec::new();
-        for well in 1..=6 {
+        for well in 1..=donors {
             wells.push(well);
             sequences.push("ACGTACGT");
             counts.push(200);
@@ -170,7 +186,7 @@ mod tests {
     fn reported_rows_get_the_evidence_of_their_sequence_in_their_donor() {
         let all = clusters();
         // Reported: the allele and the variant in donor 1.
-        let mut reported = all.filter(&[true, true, false, false, false, false, false, false]);
+        let mut reported = all.filter(&first_two(&all));
         add_evidence_columns(&mut reported, &all).unwrap();
         for name in COLUMNS {
             assert!(reported.column(name).is_ok(), "{name}");
@@ -179,8 +195,8 @@ mod tests {
         // 200 reads are two copies; the variant holds one.
         assert_eq!(floats("copies"), [Some(2.0), Some(1.0)]);
         assert_eq!(reported.ints("db_distance").unwrap(), [Some(0), Some(1)]);
-        assert_eq!(reported.ints("donors").unwrap(), [Some(6), Some(2)]);
-        assert_eq!(reported.ints("carriers").unwrap(), [Some(6), Some(1)]);
+        assert_eq!(reported.ints("donors").unwrap(), [Some(12), Some(2)]);
+        assert_eq!(reported.ints("carriers").unwrap(), [Some(12), Some(1)]);
         let relation: Vec<String> = text(&reported, "relation").unwrap();
         assert_eq!(relation, ["top of gene", "1 difference"]);
         assert_eq!(
@@ -190,6 +206,23 @@ mod tests {
         // No artifacts were seen on this tiny plate, so their tail is the
         // default one and the evidence modest.
         assert!(floats("evidence")[1].unwrap() > 0.5);
+    }
+
+    fn first_two(frame: &Frame) -> Vec<bool> {
+        (0..frame.nrows()).map(|row| row < 2).collect()
+    }
+
+    #[test]
+    fn segregation_is_left_open_for_a_handful_of_donors() {
+        let all = clusters_of(6);
+        let mut reported = all.filter(&first_two(&all));
+        add_evidence_columns(&mut reported, &all).unwrap();
+        assert_eq!(
+            *reported.column("segregates").unwrap(),
+            Column::Bool(vec![None, None])
+        );
+        // The other columns are still given.
+        assert_eq!(reported.ints("carriers").unwrap(), [Some(6), Some(1)]);
     }
 
     #[test]

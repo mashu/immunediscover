@@ -207,12 +207,15 @@ pub fn load_ki_target_alleles(alleles_tsv: &Path, gene: GeneKind) -> Result<Hash
     Ok(out)
 }
 
+/// The target allele names, and the same names grouped by gene.
+pub type TargetAlleles = (BTreeSet<String>, BTreeMap<String, BTreeSet<String>>);
+
 /// KI targets present in both `alleles.tsv` and the target FASTA.
 pub fn load_target_alleles(
     fasta_path: &Path,
     alleles_tsv: &Path,
     gene: GeneKind,
-) -> Result<(BTreeSet<String>, BTreeMap<String, BTreeSet<String>>)> {
+) -> Result<TargetAlleles> {
     let ki = load_ki_target_alleles(alleles_tsv, gene)?;
     let mut target_alleles = BTreeSet::new();
     let mut target_genes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -227,7 +230,10 @@ pub fn load_target_alleles(
         }
         target_alleles.insert(allele_name.clone());
         for g in genes {
-            target_genes.entry(g).or_default().insert(allele_name.clone());
+            target_genes
+                .entry(g)
+                .or_default()
+                .insert(allele_name.clone());
         }
     }
     Ok((target_alleles, target_genes))
@@ -331,10 +337,8 @@ pub fn analyze_blast_results(
         );
     }
 
-    let missing_targets: BTreeSet<String> = target_alleles
-        .difference(&found_targets)
-        .cloned()
-        .collect();
+    let missing_targets: BTreeSet<String> =
+        target_alleles.difference(&found_targets).cloned().collect();
 
     Ok(RecoveryReport {
         gene,
@@ -413,27 +417,24 @@ pub fn format_report(report: &RecoveryReport) -> String {
     let _ = writeln!(out, "False positive rate:                 {fp_pct:.1}%");
     if fp_pct > 50.0 {
         let _ = writeln!(out);
-        let _ = writeln!(
-            out,
-            "⚠ WARNING: High false positive rate ({fp_pct:.1}%)"
-        );
+        let _ = writeln!(out, "⚠ WARNING: High false positive rate ({fp_pct:.1}%)");
         let _ = writeln!(
             out,
             "  This suggests BLAST parameters may be too relaxed, allowing many non-target alleles."
         );
     } else if fp_pct > 20.0 {
         let _ = writeln!(out);
-        let _ = writeln!(
-            out,
-            "⚠ NOTE: Moderate false positive rate ({fp_pct:.1}%)"
-        );
+        let _ = writeln!(out, "⚠ NOTE: Moderate false positive rate ({fp_pct:.1}%)");
         let _ = writeln!(
             out,
             "  Some non-target alleles are being detected. This may be acceptable for maximum recovery."
         );
     } else {
         let _ = writeln!(out);
-        let _ = writeln!(out, "✓ Low false positive rate - parameters appear well-tuned.");
+        let _ = writeln!(
+            out,
+            "✓ Low false positive rate - parameters appear well-tuned."
+        );
     }
     let _ = writeln!(out, "{}", "=".repeat(80));
 
@@ -512,8 +513,16 @@ pub fn split_fasta_by_s_suffix(
     }
     let origin_n = origin.len();
     let target_n = target.len();
-    write_fasta(origin_out, origin, Some(crate::io::fasta::DEFAULT_LINE_WIDTH))?;
-    write_fasta(target_out, target, Some(crate::io::fasta::DEFAULT_LINE_WIDTH))?;
+    write_fasta(
+        origin_out,
+        origin,
+        Some(crate::io::fasta::DEFAULT_LINE_WIDTH),
+    )?;
+    write_fasta(
+        target_out,
+        target,
+        Some(crate::io::fasta::DEFAULT_LINE_WIDTH),
+    )?;
     Ok((origin_n, target_n))
 }
 
@@ -531,8 +540,7 @@ mod tests {
 
     #[test]
     fn expand_slash_alleles() {
-        let expanded =
-            expand_allele_combinations("IGHV3-30*02/IGHV3-30-5*02_S9143");
+        let expanded = expand_allele_combinations("IGHV3-30*02/IGHV3-30-5*02_S9143");
         assert!(expanded.contains("IGHV3-30*02_S9143"));
         assert!(expanded.contains("IGHV3-30-5*02_S9143"));
     }
