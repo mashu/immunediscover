@@ -25,14 +25,15 @@ impl PreprocessCommand {
 pub struct DemultiplexArgs {
     /// Input FASTQ file with reads (single-end)
     fastq: PathBuf,
-    /// TSV with well indices/barcodes and case identifiers
+    /// Index sheet (TSV) with the columns forward_index, reverse_index and
+    /// case; one row per well
     indices: PathBuf,
     /// Output TSV (gz auto-enabled) with demultiplexed reads and metadata
     output: PathBuf,
-    /// Minimum read length to keep
+    /// Reads shorter than this are dropped
     #[arg(short = 'l', long = "length", default_value_t = 200)]
     length: usize,
-    /// Write per-case FASTQ files
+    /// Also write one FASTQ file per donor
     #[arg(short = 's', long = "split")]
     split: bool,
     /// Name of the forward array index to use for demultiplexing (if present)

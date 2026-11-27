@@ -33,98 +33,107 @@ impl DiscoverCommand {
 
 #[derive(Debug, Args)]
 pub struct BlastArgs {
-    /// TSV file with demultiplex data
+    /// Reads of the plate, one row per read: the table written by
+    /// `preprocess demultiplex` (columns well, case, name, genomic_sequence)
     #[arg(required_unless_present = "show_presets")]
     input: Option<PathBuf>,
-    /// FASTA file with database sequences
+    /// Known alleles (FASTA, names like IGHV1-69*01)
     #[arg(required_unless_present = "show_presets")]
     fasta: Option<PathBuf>,
-    /// TSV file to save discovery results
+    /// Where to write the result table (.gz is added)
     #[arg(required_unless_present = "show_presets")]
     output: Option<PathBuf>,
-    /// FASTA file with pseudo-genes
+    /// Pseudogenes (FASTA). Reads that resemble one of them more than any
+    /// allele are discarded
     #[arg(short = 'p', long = "pseudo", default_value = "")]
     pseudo: String,
-    /// Minimum number of reads, required both of the reported variant
-    /// (`full_count`) and of the allele (`count`) [default: 5]
+    /// Minimum number of reads for a sequence to be reported in a donor.
+    /// Both `full_count` and `count` must reach it [default: 5]
     #[arg(short = 'c', long = "minfullcount")]
     minfullcount: Option<i64>,
-    /// Minimum ratio to the best of the gene, required both of
-    /// `full_ratio` and of `ratio` [default: 0.1]
+    /// Minimum number of reads relative to the best allele of the same gene
+    /// in the donor (0-1). Both `full_ratio` and `ratio` must reach it.
+    /// Sequencing errors stay far below it; a second allele of the gene is
+    /// near 1 [default: 0.1]
     #[arg(short = 'f', long = "minfullratio", value_parser = unit_interval)]
     minfullratio: Option<f64>,
-    /// Minimum subject (database) coverage [default: 0.1]
+    /// Minimum share (0-1) of the database allele that a read must cover to
+    /// be assigned to it [default: 0.1]
     #[arg(short = 's', long = "subjectcov", value_parser = unit_interval)]
     subjectcov: Option<f64>,
-    /// Maximum distance allowed for alleles [default: 20]
+    /// Maximum number of differences from the nearest database allele.
+    /// Sequences further away are not reported [default: 20]
     #[arg(short = 'd', long = "maxdist", value_parser = clap::value_parser!(i64).range(0..))]
     maxdist: Option<i64>,
-    /// Minimum length of the read segment aligned by BLAST (allele plus
-    /// extension) [default: 290]
+    /// Minimum length of the matching part of a read (the allele plus the
+    /// bases recorded around it). Shorter matches are fragments
+    /// [default: 290]
     #[arg(short = 'l', long = "length", value_parser = positive_size)]
     length: Option<usize>,
-    /// Minimum number of nucleotides required between target gene and end of the read [default: 0]
+    /// Minimum number of bases between the allele and the end of the read.
+    /// Removes alleles cut off by the read end [default: 0]
     #[arg(short = 'e', long = "edge", value_parser = clap::value_parser!(i64).range(0..))]
     edge: Option<i64>,
-    /// Additional arguments to pass to blastn
+    /// Settings passed on to blastn. Change only if you know BLAST
     /// [default: "-task megablast -subject_besthit -num_alignments 5 -qcov_hsp_perc 50"]
     #[arg(short = 'a', long = "args", allow_hyphen_values = true)]
     args: Option<String>,
-    /// Overwrite existing files (i.e BLAST cache)
+    /// Search again instead of reusing the BLAST results of an earlier run
     #[arg(short = 'o', long = "overwrite")]
     overwrite: bool,
-    /// Use gene preset parameters for V, D, or J analysis. Any option given
-    /// explicitly takes precedence over the preset.
+    /// Use the settings tuned for V, D or J genes (see --show-presets). Any
+    /// option given explicitly takes precedence over the preset.
     #[arg(short = 'g', long = "gene")]
     gene: Option<Preset>,
-    /// Show preset parameters for V, D, and J analysis and exit
+    /// Print the V, D and J presets and exit
     #[arg(short = 'G', long = "show-presets")]
     show_presets: bool,
-    /// Forward extension length [default: 20]
+    /// Number of bases recorded before each allele. Alleles are searched
+    /// together with the bases around them, which anchors their ends
+    /// [default: 20]
     #[arg(long = "forward")]
     forward: Option<usize>,
-    /// Reverse extension length [default: 20]
+    /// Number of bases recorded after each allele [default: 20]
     #[arg(long = "reverse")]
     reverse: Option<usize>,
-    /// How far a read may be from a database allele and still supply the
-    /// context (flanks) used to extend it. A read containing no allele
-    /// exactly is assigned to the allele(s) at the smallest edit distance,
-    /// if that distance is at most this value. 0 uses exact matches only;
-    /// raise it when the database is from another species or lacks the
-    /// donors' alleles.
+    /// How many differences a read may have from a database allele and still
+    /// be used to learn the bases around that allele. 0 uses only reads
+    /// that contain the allele exactly. Raise it (for example to 3) when the
+    /// database comes from another species or lacks most alleles of the
+    /// donors.
     #[arg(long = "extension-maxdist", default_value_t = 0)]
     extension_maxdist: usize,
-    /// Leave an allele that is found in no read without extension. By
-    /// default such an allele takes the context of the other alleles of
-    /// its gene, so that all alleles of a gene are searched alike.
+    /// Do not lend surrounding bases to alleles found in no read. By default
+    /// such an allele takes the surroundings of the other alleles of its
+    /// gene, so that all alleles of a gene are searched alike.
     #[arg(long = "no-gene-context")]
     no_gene_context: bool,
-    /// Minimum fraction (0-1) of affix positions that match the read in the semi-global affix-read alignment
-    /// used for 5'/3' trimming; prefix and suffix each must meet this or the candidate is dropped.
-    /// [default: 0.75]
+    /// How well the bases recorded around an allele must match the read
+    /// when they are cut off again (0-1). A sequence whose surroundings
+    /// match worse on either side is dropped [default: 0.75]
     #[arg(short = 'q', long = "minquality", value_parser = unit_interval)]
     minquality: Option<f64>,
-    /// Report a sequence that differs from its best hit but is contained in
-    /// a known allele as novel. Without this flag it takes the name of the
-    /// known allele that contains it.
+    /// Report a sequence that is a part of a known allele as new. Without
+    /// this flag it takes the name of the known allele that contains it.
     #[arg(short = 'i', long = "isin", action = ArgAction::SetFalse)]
     isin: bool,
-    /// Keep rows where trimming failed (aln_qseq empty, aln_mismatch -1). By
-    /// default such rows are dropped. Kept rows are exempt from --min-corecov
-    /// and --maxdist, which cannot be evaluated for them.
+    /// Keep sequences whose surrounding bases could not be cut off (their
+    /// aln_qseq is empty and aln_mismatch is -1). For troubleshooting;
+    /// --min-corecov and --maxdist cannot be applied to them.
     #[arg(long = "keep-failed")]
     keep_failed: bool,
-    /// Minimum ratio length(aln_qseq)/length(db_seq) after trimming [default: 0.6]
+    /// Minimum length of the found sequence relative to the database allele
+    /// (0-1). Removes truncated sequences [default: 0.6]
     #[arg(long = "min-corecov", value_parser = unit_interval)]
     min_corecov: Option<f64>,
-    /// Maximum number of extension variants (rows with the same trimmed
-    /// sequence but different read context) reported per allele
+    /// How many versions of the surrounding bases to report per allele (rows
+    /// with the same sequence in different surroundings)
     #[arg(short = 't', long = "top", default_value_t = 1, value_parser = positive_size)]
     top: usize,
-    /// Print verbose output and save intermediate files, including an
-    /// unfiltered cluster table (`*.unfiltered.tsv.gz`) beside the output.
-    /// Alleles lost only to full_count/full_ratio (flank-split) are always
-    /// summarised in `*.flank-split.tsv.gz` when any exist.
+    /// Also write every sequence before the thresholds to
+    /// `<output>.unfiltered.tsv.gz`. Alleles whose reads are spread over
+    /// several surroundings, none passing on its own, are always listed in
+    /// `<output>.flank-split.tsv.gz`.
     #[arg(short = 'v', long = "verbose")]
     verbose: bool,
     /// Leave out the evidence columns (db_distance, copies, evidence,
@@ -134,8 +143,8 @@ pub struct BlastArgs {
     /// guide: https://mashu.github.io/immunediscover/evidence/
     #[arg(long = "no-evidence")]
     no_evidence: bool,
-    /// Directory for BLAST cache, temporary query FASTA, combined/extended DB, and affix files
-    /// (relative paths use the current directory). Nothing is written beside the input TSV.
+    /// Folder for intermediate files. BLAST results are kept there and
+    /// reused by later runs; it is safe to delete.
     #[arg(long = "work-dir", default_value = DEFAULT_WORK_DIR)]
     work_dir: String,
 }
@@ -205,34 +214,38 @@ pub struct HsmmArgs {
     fasta: PathBuf,
     /// TSV.GZ file to save detected D alleles (novel and/or known) with flanks
     output: PathBuf,
-    /// Allelic ratio threshold for known D selection per donor and gene
+    /// Minimum reads of a known D allele relative to the best allele of its
+    /// gene in the donor (0-1), for the allele to be used for learning
     #[arg(short = 'r', long = "ratio", default_value_t = 0.2, value_parser = unit_interval)]
     ratio: f64,
-    /// Minimum count for a known D allele to be considered in training
+    /// Minimum reads of a known D allele for it to be used for learning
     #[arg(short = 'c', long = "mincount", default_value_t = 10, value_parser = at_least_one)]
     mincount: i64,
-    /// Minimum posterior probability for accepting an HSMM detection
+    /// Minimum confidence (0-1) of a detected D gene
     #[arg(long = "min-posterior", default_value_t = 0.7, value_parser = unit_interval)]
     min_posterior: f64,
-    /// Minimum D gene length for HSMM duration model (auto if 0)
+    /// Shortest D gene considered (0 = set automatically)
     #[arg(long = "min-gene-len", default_value_t = 10)]
     min_gene_len: usize,
-    /// Maximum D gene length for HSMM duration model (auto if 0)
+    /// Longest D gene considered (0 = set automatically)
     #[arg(long = "max-gene-len", default_value_t = 70)]
     max_gene_len: usize,
-    /// Limit number of demultiplexed reads to process (0 means no limit)
+    /// Use only the first N reads (0 = all). For quick tests
     #[arg(short = 'l', long = "limit", default_value_t = 0)]
     limit: usize,
-    /// Minimum count for an extracted D (after HSMM) to keep in output
+    /// Minimum reads for a found D sequence to be reported
     #[arg(long = "out-mincount", default_value_t = 10, value_parser = at_least_one)]
     out_mincount: i64,
-    /// Minimum allelic ratio within gene (per donor) for output filtering
+    /// Minimum reads of a found D sequence relative to the best of its gene
+    /// in the donor (0-1), to be reported
     #[arg(long = "out-minratio", default_value_t = 0.2, value_parser = unit_interval)]
     out_minratio: f64,
-    /// Minimum probability under pre-heptamer PWM to keep detection (0 disables)
+    /// Minimum quality (0-1) of the heptamer before the gene; 0 switches the
+    /// check off
     #[arg(long = "min-heptamer-prob-pre", default_value_t = 0.05, value_parser = unit_interval)]
     min_heptamer_prob_pre: f64,
-    /// Minimum probability under post-heptamer PWM to keep detection (0 disables)
+    /// Minimum quality (0-1) of the heptamer after the gene; 0 switches the
+    /// check off
     #[arg(long = "min-heptamer-prob-post", default_value_t = 0.05, value_parser = unit_interval)]
     min_heptamer_prob_post: f64,
 }

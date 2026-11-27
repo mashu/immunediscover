@@ -36,19 +36,19 @@ pub struct CooccurrenceArgs {
     /// Name of column with allele name
     #[arg(short = 'A', long = "allele-col", default_value = "db_name")]
     allele_col: String,
-    /// Minimum donors required to include an allele
+    /// Alleles found in fewer donors are left out
     #[arg(short = 'm', long = "min-donors", default_value_t = 2, value_parser = positive_size)]
     min_donors: usize,
-    /// Clustering method on rho: components, complete, average, or single
+    /// How alleles are grouped: components, complete, average or single
     #[arg(long = "cluster-method", default_value = "components")]
     cluster_method: ClusterMethod,
-    /// Similarity threshold for complete-linkage clustering on rho (0..1)
+    /// How strongly alleles must go together (0-1) to be grouped
     #[arg(long = "cluster-threshold", default_value_t = 0.5, value_parser = unit_interval)]
     cluster_threshold: f64,
     /// Print rho-based triangle diagnostics at cluster-threshold
     #[arg(long = "debug-triangles")]
     debug_triangles: bool,
-    /// Minimum cluster size to output
+    /// Smallest group of alleles reported
     #[arg(long = "min-cluster-size", default_value_t = 3, value_parser = positive_size)]
     min_cluster_size: usize,
     /// Optional path to save clusters (TSV)
@@ -90,7 +90,8 @@ pub struct HaplotypeArgs {
     /// Minimum count for an allele to be considered
     #[arg(short = 'c', long = "mincount", default_value_t = 5, value_parser = at_least_one)]
     mincount: i64,
-    /// Minimum allelic ratio threshold (minor/major allele ratio)
+    /// Minimum reads of the second allele relative to the first for a donor
+    /// to be called heterozygous (0-1)
     #[arg(short = 'r', long = "min-ratio", default_value_t = 0.1, value_parser = unit_interval)]
     min_ratio: f64,
     /// Optional FASTA file with novel alleles to mark in results
