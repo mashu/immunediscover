@@ -2,21 +2,16 @@
 
 ## What you need
 
-- The program: `immunediscover` (see "Building" below).
+- The program: `immunediscover` (see [Installing](install.md)).
 - For `discover blast`: NCBI BLAST+ (`blastn` and `makeblastdb` on your
   `PATH`).
 - For `search bwa`: `bwa`.
 - Your data: a FASTQ file per plate, an index sheet, and a FASTA database
   of known alleles for each gene type. See [inputs](inputs.md).
 
-## Building
+## Getting help
 
-```
-cargo build --release
-```
-
-The program is then `target/release/immunediscover`. Every command and
-sub-command explains itself with `--help`:
+Every command and sub-command explains itself with `--help`:
 
 ```
 immunediscover --help

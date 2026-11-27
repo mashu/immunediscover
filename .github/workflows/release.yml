@@ -1,0 +1,179 @@
+name: Release
+
+# A tag such as v0.5.0 builds the program for Linux and macOS and publishes
+# a release with the binaries, the installer and checksums. On pull
+# requests that touch the release machinery, everything is built and the
+# installer is tried, but nothing is published.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "install.sh"
+      - "Cargo.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Statically linked: runs on any Linux distribution, old or new.
+          - name: linux-x86_64
+            os: ubuntu-latest
+            targets: x86_64-unknown-linux-musl
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+            targets: aarch64-unknown-linux-musl
+          # One file for Apple silicon and Intel Macs.
+          - name: macos-universal
+            os: macos-latest
+            targets: aarch64-apple-darwin x86_64-apple-darwin
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.name }}
+      - name: Install the musl toolchain
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: |
+          for target in ${{ matrix.targets }}; do
+            cargo build --release --locked --bin immunediscover --target "$target"
+          done
+
+      - name: Collect the binary (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p "immunediscover-${{ matrix.name }}"
+          cp "target/${{ matrix.targets }}/release/immunediscover" "immunediscover-${{ matrix.name }}/"
+          strip "immunediscover-${{ matrix.name }}/immunediscover"
+          file "immunediscover-${{ matrix.name }}/immunediscover"
+          # It must not depend on the system's C library.
+          file "immunediscover-${{ matrix.name }}/immunediscover" | grep -Eq "statically linked|static-pie linked"
+
+      - name: Collect the binary (macOS, universal)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p "immunediscover-${{ matrix.name }}"
+          lipo -create -output "immunediscover-${{ matrix.name }}/immunediscover" \
+            target/aarch64-apple-darwin/release/immunediscover \
+            target/x86_64-apple-darwin/release/immunediscover
+          strip "immunediscover-${{ matrix.name }}/immunediscover"
+          # Apple silicon runs only signed code; an ad-hoc signature will do.
+          codesign --force --sign - "immunediscover-${{ matrix.name }}/immunediscover"
+          lipo -info "immunediscover-${{ matrix.name }}/immunediscover"
+          # The Intel half, where this Apple silicon runner can run it.
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            arch -x86_64 "immunediscover-${{ matrix.name }}/immunediscover" --version
+          fi
+
+      - name: Package
+        run: |
+          cp install.sh README.md "immunediscover-${{ matrix.name }}/"
+          tar -czf "immunediscover-${{ matrix.name }}.tar.gz" "immunediscover-${{ matrix.name }}"
+
+      - name: Try the installer from the package
+        run: |
+          set -eu
+          scratch="$(mktemp -d)"
+          tar -xzf "immunediscover-${{ matrix.name }}.tar.gz" -C "$scratch"
+          package="$scratch/immunediscover-${{ matrix.name }}"
+
+          # A computer without immunediscover: installed under its own name.
+          home="$scratch/home1"; mkdir -p "$home"
+          HOME="$home" PATH="/usr/bin:/bin" sh "$package/install.sh" --bin-dir "$home/bin"
+          "$home/bin/immunediscover" --version | grep -F "(Rust)"
+          "$home/bin/immunediscover" discover blast --show-presets > /dev/null
+
+          # A computer with another immunediscover: installed as
+          # immunediscover-rs, the other one untouched.
+          other="$scratch/other"; mkdir -p "$other"
+          printf '#!/bin/sh\necho "some other immunediscover"\n' > "$other/immunediscover"
+          chmod +x "$other/immunediscover"
+          home="$scratch/home2"; mkdir -p "$home"
+          HOME="$home" PATH="$other:/usr/bin:/bin" sh "$package/install.sh" --bin-dir "$home/bin" --no-modify-path
+          test -x "$home/bin/immunediscover-rs"
+          test ! -e "$home/bin/immunediscover"
+          "$other/immunediscover" | grep -F "some other immunediscover"
+
+          # And it can be removed again.
+          HOME="$home" PATH="/usr/bin:/bin" sh "$package/install.sh" --bin-dir "$home/bin" --uninstall
+          test ! -e "$home/bin/immunediscover-rs"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: immunediscover-${{ matrix.name }}
+          path: immunediscover-${{ matrix.name }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag must be the version of the program
+        run: |
+          version="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match version $version in Cargo.toml" >&2
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cp install.sh dist/
+          cd dist
+          sha256sum *.tar.gz install.sh > SHA256SUMS
+          cat SHA256SUMS
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "immunediscover ${GITHUB_REF_NAME#v}" \
+            --generate-notes
+
+  verify:
+    name: Install from the published release (${{ matrix.os }})
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: publish
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    steps:
+      - name: Install the way the guide says
+        run: |
+          curl -fsSL "https://github.com/${{ github.repository }}/releases/download/$GITHUB_REF_NAME/install.sh" \
+            | sh -s -- --version "$GITHUB_REF_NAME" --bin-dir "$HOME/imd-bin" --no-modify-path
+          "$HOME/imd-bin/immunediscover" --version | grep -F "${GITHUB_REF_NAME#v} (Rust)"

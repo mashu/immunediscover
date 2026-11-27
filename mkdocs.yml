@@ -31,6 +31,7 @@ theme:
 
 nav:
   - Overview: index.md
+  - Installing: install.md
   - Getting started: getting-started.md
   - Input files: inputs.md
   - Finding new alleles:
