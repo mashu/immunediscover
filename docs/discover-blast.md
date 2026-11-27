@@ -81,8 +81,14 @@ gene type. Any option you give yourself takes precedence. Show them with
 | `--minquality` | 0.75 | 0.62 | 0.5 | 0.75 |
 | `--min-corecov` | 0.6 | 0.5 | 0.6 | 0.6 |
 
-D genes are short, so they need longer surroundings and a more sensitive
-BLAST search; the D preset also changes the BLAST settings (`--args`).
+D genes are short, so they need longer surroundings. These values apply
+with BLAST and with the built-in aligner alike.
+
+With BLAST, each preset also chooses the settings of `blastn` itself
+(`--args`); for D genes that is a more sensitive search for short
+matches. `-G` lists them. The built-in aligner has no such settings: it
+treats short and long genes the same way, and `--args` cannot be combined
+with `--aligner builtin`.
 
 ## All options
 
@@ -114,7 +120,7 @@ BLAST search; the D preset also changes the BLAST settings (`--args`).
 | `-s`, `--subjectcov` | 0.1 | Minimum share of the database allele that the read must cover. |
 | `-e`, `--edge` | 0 | Minimum bases between the allele and the end of the read. Removes alleles cut off by the read end. |
 | `--aligner` | `blast` | Which program compares the reads with the alleles: `blast` (NCBI BLAST+, which must be installed) or `builtin` (part of immunediscover, nothing else needed). |
-| `-a`, `--args` | megablast settings | Extra settings passed to `blastn`. Change only if you know BLAST. Not used with `--aligner builtin`. |
+| `-a`, `--args` | megablast settings | Extra settings passed to `blastn`. Change only if you know BLAST. Not allowed with `--aligner builtin`. |
 | `-i`, `--isin` | off | A found sequence that is a piece of a known allele normally takes that allele's name. With `-i` it is reported as new. |
 | `-g`, `--gene` | none | Preset for `V`, `D` or `J`. |
 | `-G`, `--show-presets` | | Print the presets and stop. |

@@ -6,7 +6,7 @@ use clap::{ArgAction, Args, Subcommand, ValueEnum};
 
 use crate::error::Error;
 
-use super::presets::{describe_presets, resolve, Preset, PresetValues};
+use super::presets::{describe_presets, resolve, resolve_blast_args, Preset, PresetValues};
 use super::validators::{at_least_one, positive_size, unit_interval};
 use crate::commands::discover::blast::workdir::DEFAULT_WORK_DIR;
 use crate::commands::discover::blast::{self, Aligner, BlastParams};
@@ -84,12 +84,14 @@ pub struct BlastArgs {
     /// Removes alleles cut off by the read end [default: 0]
     #[arg(short = 'e', long = "edge", value_parser = clap::value_parser!(i64).range(0..))]
     edge: Option<i64>,
-    /// Settings passed on to blastn. Change only if you know BLAST
+    /// Settings passed on to blastn. Change only if you know BLAST. Not
+    /// allowed with --aligner builtin
     /// [default: "-task megablast -subject_besthit -num_alignments 5 -qcov_hsp_perc 50"]
     #[arg(short = 'a', long = "args", allow_hyphen_values = true)]
     args: Option<String>,
     /// Which program compares the reads with the known alleles. `builtin`
-    /// needs no BLAST installation; --args does not apply to it
+    /// needs no BLAST installation. The presets (-g) apply to both, except
+    /// for the settings of blastn itself (--args)
     #[arg(long = "aligner", value_enum, default_value_t = AlignerChoice::Blast)]
     aligner: AlignerChoice,
     /// Search again instead of reusing the BLAST results of an earlier run
@@ -172,6 +174,11 @@ impl BlastArgs {
         let positional = |value: Option<PathBuf>, name: &str| {
             value.ok_or_else(|| Error::invalid(format!("Missing argument <{name}>")))
         };
+        if self.aligner == AlignerChoice::Builtin && self.args.is_some() {
+            return Err(Error::invalid(
+                "--args sets options of blastn and cannot be combined with --aligner builtin",
+            ));
+        }
         let resolved = resolve(
             self.gene,
             PresetValues {
@@ -185,9 +192,16 @@ impl BlastArgs {
                 subject_coverage: self.subjectcov,
                 min_quality: self.minquality,
                 min_core_coverage: self.min_corecov,
-                blast_args: self.args,
             },
         );
+        // The settings of blastn belong to BLAST alone: the built-in
+        // aligner neither uses nor reports them.
+        let aligner = match self.aligner {
+            AlignerChoice::Blast => Aligner::Blast {
+                args: resolve_blast_args(self.gene, self.args),
+            },
+            AlignerChoice::Builtin => Aligner::Builtin,
+        };
         let params = BlastParams {
             input: positional(self.input, "INPUT")?,
             fasta: positional(self.fasta, "FASTA")?,
@@ -199,11 +213,7 @@ impl BlastArgs {
             max_distance: resolved.max_distance,
             min_length: resolved.length,
             edge: resolved.edge,
-            blast_args: resolved.blast_args,
-            aligner: match self.aligner {
-                AlignerChoice::Blast => Aligner::Blast,
-                AlignerChoice::Builtin => Aligner::Builtin,
-            },
+            aligner,
             overwrite: self.overwrite,
             forward_extension: resolved.forward,
             reverse_extension: resolved.reverse,

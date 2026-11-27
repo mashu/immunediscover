@@ -20,12 +20,22 @@ use crate::seq::search::find_first;
 use crate::{info, warn};
 
 /// The program that compares reads with the database.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Aligner {
-    /// NCBI `blastn`, which must be installed.
-    Blast,
+    /// NCBI `blastn`, which must be installed, with extra arguments for it.
+    Blast { args: String },
     /// The aligner that is part of this program ([`crate::align::search`]).
     Builtin,
+}
+
+impl Aligner {
+    /// Name for messages.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Aligner::Blast { .. } => "BLAST",
+            Aligner::Builtin => "the built-in aligner",
+        }
+    }
 }
 
 /// Thresholds of the assignment step.
@@ -38,8 +48,6 @@ pub struct AssignSettings {
     pub min_edge: i64,
     /// Minimum alignment length relative to the subject length.
     pub min_subject_coverage: f64,
-    /// Extra `blastn` arguments.
-    pub blast_args: String,
     /// Also write intermediate tables into the run directory.
     pub verbose: bool,
     /// Ignore a cached BLAST result.
@@ -145,6 +153,7 @@ fn blast_best_hits(
     reads: &Frame,
     database_fasta: &Path,
     layout: &WorkLayout,
+    blast_args: &str,
     settings: &AssignSettings,
 ) -> Result<Frame> {
     verify_blastn_version()?;
@@ -152,7 +161,7 @@ fn blast_best_hits(
     let fingerprint = Fingerprint::of(&[
         file_identity(input_tsv)?,
         content_digest(database_fasta)?,
-        settings.blast_args.clone(),
+        blast_args.to_string(),
     ]);
     let cached = layout.hits.is_file();
     let current = fingerprint.matches(&layout.hits);
@@ -186,12 +195,7 @@ fn blast_best_hits(
         // and the result takes its place only once it is complete.
         write_query_fasta(&layout.query_fasta, reads)?;
         let partial = layout.run_dir.join("hits.partial.blast.gz");
-        let searched = blastn(
-            &layout.query_fasta,
-            &database,
-            &partial,
-            &settings.blast_args,
-        );
+        let searched = blastn(&layout.query_fasta, &database, &partial, blast_args);
         let _ = std::fs::remove_file(&layout.query_fasta);
         searched?;
         std::fs::rename(&partial, &layout.hits).map_err(|e| Error::io(&layout.hits, e))?;
@@ -356,8 +360,10 @@ pub fn blast_discover(
         warn!("Duplicated names found in input. Using unique ones but this is likely user error!");
     }
 
-    let best = match settings.aligner {
-        Aligner::Blast => blast_best_hits(input_tsv, &reads, database_fasta, layout, settings)?,
+    let best = match &settings.aligner {
+        Aligner::Blast { args } => {
+            blast_best_hits(input_tsv, &reads, database_fasta, layout, args, settings)?
+        }
         Aligner::Builtin => builtin_best_hits(&reads, database_fasta, settings)?,
     };
 
