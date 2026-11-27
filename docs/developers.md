@@ -62,6 +62,17 @@ cargo build --release --bin ki-check
   --skip-discover
 ```
 
+With `--builtin-aligner` the reads are assigned by the built-in aligner
+instead of BLAST. Give such a run its own `--out-dir`, so that the two
+sets of reports can be compared:
+
+```
+./target/release/ki-check \
+  --check-root /path/to/ImmuneDiscover-IGH-2026-Check \
+  --out-dir /path/to/ImmuneDiscover-IGH-2026-Check/analysis_results_builtin \
+  --builtin-aligner
+```
+
 Defaults write under `{check-root}/analysis_results_rs/`. Exit status is
 non-zero if any target is missed; pass `--max-fp-rate N` to also fail when
 the false-positive rate exceeds N percent.
@@ -115,6 +126,8 @@ src/
                  heptamer, bwa/{aligner, cigar}
     discover/    blast/{runner, workdir, locate, affixes, trim, assign}
                  hsmm/{model, scan}, profile
+    align.rs     the `align` command: reads against a database with the
+                 built-in aligner, table or BLAST-style output
     variants.rs  the one definition of full_count / count / ratios /
                  flank_index / top, used by search exact and discover blast
     analyze/     cooccurrence/{stats, cluster}, haplotype/{flanks, genotype}
@@ -128,7 +141,10 @@ src/
               multi-pattern search, database and demultiplex-table loading
   align/      Needleman-Wunsch (port of BioAlignments.jl, same traceback
               priority), EDNAFULL, semi-global mode, edit distance, banded
-              approximate matching
+              approximate matching; the built-in aligner: gotoh (banded
+              affine-gap alignment of a subject inside a read), seeds
+              (word index and diagonal votes), search (best subject per
+              read, both strands, all cores)
   stats/      hypergeometric tail, Benjamini-Hochberg, hierarchical
               clustering (port of Clustering.jl), descriptive statistics
   filters/    `RowFilter` trait and the threshold filters combined by
@@ -140,8 +156,9 @@ src/
   bin/        ki_check.rs, the self-check binary
 tests/
   pipeline.rs end-to-end runs of the program on a small synthetic plate:
-              demultiplex, search exact, analyze haplotype, discover blast
-              (the last needs BLAST+ and is skipped without it)
+              demultiplex, search exact, analyze haplotype, align, and
+              discover blast with both aligners (the BLAST runs need
+              BLAST+ and are skipped without it)
 docs/         the user guide (this site); mkdocs.yml at the top level
 ```
 
@@ -249,7 +266,36 @@ parity/runall.sh rs          # the Rust pipeline end to end, then a full diff
 
 See the header of `parity/runall.sh` for the environment variables.
 
+## The built-in aligner
+
+`align/gotoh.rs` aligns a subject from end to end inside a read (free
+read ends, affine gaps), in a band of diagonals. Its scores are tested
+against the unbanded Needleman-Wunsch of `align/needleman_wunsch.rs` on
+random sequences. `align/search.rs` chooses the subjects to align from
+shared 10-mers and is tested against aligning every subject in whole.
+A subject is skipped only when its shared words prove that it cannot
+reach the identity of the best alignment so far: with every `step`-th
+word of the read looked up, one difference removes at most
+`ceil(10 / step)` shared words.
+
+`discover blast --aligner builtin` turns the hits into the columns BLAST
+would give (`assign::builtin_best_hits`), so that everything after the
+assignment is the same code for both aligners. `ki-check
+--builtin-aligner` runs the self-check with it.
+
 ## Speed
 
 281 000 reads, 2 cores: demultiplex 3.9 s, exact search 1.1–1.4 s,
 heptamer 2.4 s, BLAST discovery 57 s (48 s of it inside `blastn`).
+
+Assignment of reads on simulated plates, 2 cores, same discovery result
+with both aligners:
+
+| Plate | Reads | `blastn` | Built-in aligner |
+|---|---|---|---|
+| V: 63 genes in 7 families, 256 alleles, 35 new alleles in 48 donors | 151 200 | 44 s | 13 s |
+| D: 25 genes of 11 to 37 bases, 20 new alleles in 48 donors | 96 000 | 187 s | 2.2 s |
+
+Reads far from every allele cost the built-in aligner about ten times
+more than reads of a known gene, because few candidates can be ruled out
+by their shared words.

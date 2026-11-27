@@ -2,14 +2,14 @@
 
 use std::path::PathBuf;
 
-use clap::{ArgAction, Args, Subcommand};
+use clap::{ArgAction, Args, Subcommand, ValueEnum};
 
 use crate::error::Error;
 
 use super::presets::{describe_presets, resolve, Preset, PresetValues};
 use super::validators::{at_least_one, positive_size, unit_interval};
 use crate::commands::discover::blast::workdir::DEFAULT_WORK_DIR;
-use crate::commands::discover::blast::{self, BlastParams};
+use crate::commands::discover::blast::{self, Aligner, BlastParams};
 use crate::commands::discover::hsmm::{self, HsmmParams};
 use crate::error::Result;
 use crate::info;
@@ -29,6 +29,16 @@ impl DiscoverCommand {
             DiscoverCommand::Hsmm(args) => args.run(),
         }
     }
+}
+
+/// The program that compares the reads with the known alleles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum AlignerChoice {
+    /// NCBI blastn, which must be installed
+    Blast,
+    /// The aligner built into this program. Needs no other software and
+    /// compares the whole allele, so differences at its ends are counted
+    Builtin,
 }
 
 #[derive(Debug, Args)]
@@ -78,6 +88,10 @@ pub struct BlastArgs {
     /// [default: "-task megablast -subject_besthit -num_alignments 5 -qcov_hsp_perc 50"]
     #[arg(short = 'a', long = "args", allow_hyphen_values = true)]
     args: Option<String>,
+    /// Which program compares the reads with the known alleles. `builtin`
+    /// needs no BLAST installation; --args does not apply to it
+    #[arg(long = "aligner", value_enum, default_value_t = AlignerChoice::Blast)]
+    aligner: AlignerChoice,
     /// Search again instead of reusing the BLAST results of an earlier run
     #[arg(short = 'o', long = "overwrite")]
     overwrite: bool,
@@ -186,6 +200,10 @@ impl BlastArgs {
             min_length: resolved.length,
             edge: resolved.edge,
             blast_args: resolved.blast_args,
+            aligner: match self.aligner {
+                AlignerChoice::Blast => Aligner::Blast,
+                AlignerChoice::Builtin => Aligner::Builtin,
+            },
             overwrite: self.overwrite,
             forward_extension: resolved.forward,
             reverse_extension: resolved.reverse,

@@ -2,7 +2,10 @@
 
 pub mod banded;
 pub mod distance;
+pub mod gotoh;
 pub mod needleman_wunsch;
+pub mod search;
+pub mod seeds;
 pub mod submat;
 
 pub use banded::{place_near_diagonal, Placement};

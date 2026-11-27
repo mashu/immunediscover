@@ -4,9 +4,10 @@
 //! are generated from a fixed seed. The plate is small enough for the whole
 //! file to run in a few seconds.
 //!
-//! `discover blast` needs BLAST+. Without `blastn` on the `PATH` its test is
-//! skipped, unless `IMMUNEDISCOVER_REQUIRE_BLAST` is set (as in CI), in
-//! which case a missing `blastn` fails the test.
+//! `discover blast` with BLAST needs BLAST+. Without `blastn` on the `PATH`
+//! those parts are skipped, unless `IMMUNEDISCOVER_REQUIRE_BLAST` is set (as
+//! in CI), in which case a missing `blastn` fails the test. The built-in
+//! aligner is tested everywhere.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -338,30 +339,12 @@ fn known_alleles_are_found_with_their_reads_and_genotypes_follow() {
     }
 }
 
-#[test]
-fn the_allele_missing_from_the_database_is_discovered() {
-    if !blastn_available() {
-        eprintln!("skipped: blastn is not on the PATH");
-        return;
-    }
-    let (dir, plate) = demultiplexed();
-    let discover = [
-        "discover",
-        "blast",
-        "demux.tsv.gz",
-        "db.fasta",
-        "novel.tsv",
-        "-g",
-        "V",
-    ];
-    let first = run(dir.path(), &discover);
-    assert!(!printed(&first).contains("Skipping BLASTn"));
-    let result_path = dir.path().join("novel.tsv.gz");
-    let result = table(result_path.clone());
-
-    let names = column(&result, "allele_name");
-    let cases = column(&result, "case");
-    let sequences = column(&result, "aln_qseq");
+/// What `discover blast` must report for the plate, whichever aligner
+/// compared the reads with the database.
+fn check_discovery(plate: &Plate, result: &Frame) {
+    let names = column(result, "allele_name");
+    let cases = column(result, "case");
+    let sequences = column(result, "aln_qseq");
     let new: Vec<usize> = (0..result.nrows())
         .filter(|r| names[*r].contains("_S"))
         .collect();
@@ -393,7 +376,7 @@ fn the_allele_missing_from_the_database_is_discovered() {
 
     // The evidence columns of the new allele.
     let number = |name: &str, row: usize| -> f64 {
-        column(&result, name)[row]
+        column(result, name)[row]
             .parse()
             .unwrap_or_else(|_| panic!("{name} is empty in row {row}"))
     };
@@ -403,8 +386,30 @@ fn the_allele_missing_from_the_database_is_discovered() {
         let copies = number("copies", *row);
         assert!((0.7..1.4).contains(&copies), "copies {copies}");
         assert!(number("evidence", *row) > 0.0);
-        assert_eq!(column(&result, "segregates")[*row], "true");
+        assert_eq!(column(result, "segregates")[*row], "true");
     }
+}
+
+#[test]
+fn the_allele_missing_from_the_database_is_discovered() {
+    if !blastn_available() {
+        eprintln!("skipped: blastn is not on the PATH");
+        return;
+    }
+    let (dir, plate) = demultiplexed();
+    let discover = [
+        "discover",
+        "blast",
+        "demux.tsv.gz",
+        "db.fasta",
+        "novel.tsv",
+        "-g",
+        "V",
+    ];
+    let first = run(dir.path(), &discover);
+    assert!(!printed(&first).contains("Skipping BLASTn"));
+    let result_path = dir.path().join("novel.tsv.gz");
+    check_discovery(&plate, &table(result_path.clone()));
 
     // A second run reuses the search and gives the same table.
     let before = std::fs::read(&result_path).unwrap();
@@ -461,4 +466,189 @@ fn the_allele_missing_from_the_database_is_discovered() {
     let exported = std::fs::read_to_string(dir.path().join("novel.fasta")).unwrap();
     assert_eq!(exported.matches('>').count(), 1);
     assert!(exported.replace('\n', "").ends_with(&plate.novel));
+}
+
+/// Rows of a discovery table as (case, sequence, name, reads), sorted.
+fn discovered(result: &Frame) -> Vec<(String, String, String, String)> {
+    let mut rows: Vec<_> = column(result, "case")
+        .into_iter()
+        .zip(column(result, "aln_qseq"))
+        .zip(column(result, "allele_name"))
+        .zip(column(result, "count"))
+        .map(|(((case, sequence), name), count)| (case, sequence, name, count))
+        .collect();
+    rows.sort();
+    rows
+}
+
+#[test]
+fn the_builtin_aligner_discovers_the_same_alleles_without_blast() {
+    let (dir, plate) = demultiplexed();
+    let output = run(
+        dir.path(),
+        &[
+            "discover",
+            "blast",
+            "demux.tsv.gz",
+            "db.fasta",
+            "builtin.tsv",
+            "-g",
+            "V",
+            "--aligner",
+            "builtin",
+        ],
+    );
+    assert!(printed(&output).contains("Built-in aligner"));
+    assert!(!printed(&output).contains("blastn"));
+    let builtin = table(dir.path().join("builtin.tsv.gz"));
+    check_discovery(&plate, &builtin);
+
+    if !blastn_available() {
+        eprintln!("comparison with BLAST skipped: blastn is not on the PATH");
+        return;
+    }
+    run(
+        dir.path(),
+        &[
+            "discover",
+            "blast",
+            "demux.tsv.gz",
+            "db.fasta",
+            "blast.tsv",
+            "-g",
+            "V",
+        ],
+    );
+    let blast = table(dir.path().join("blast.tsv.gz"));
+    assert_eq!(discovered(&builtin), discovered(&blast));
+}
+
+#[test]
+fn a_difference_at_the_first_base_of_an_allele_is_not_clipped() {
+    let (dir, plate) = demultiplexed();
+    // A database whose third gene starts with another base than the
+    // alleles of the plate: every allele of that gene is new, and differs
+    // from the database exactly where a local alignment would stop early.
+    let gene = 2;
+    let mut database = String::new();
+    for (g, known) in plate.genes.iter().enumerate() {
+        let allele = &known.alleles[0];
+        let sequence = if g == gene {
+            substitute(allele, 0)
+        } else {
+            allele.clone()
+        };
+        let _ = writeln!(database, ">{}*01\n{sequence}", known.name);
+    }
+    std::fs::write(dir.path().join("changed.fasta"), database).unwrap();
+    // No surrounding bases: the first base of the allele is the first
+    // base that is compared.
+    run(
+        dir.path(),
+        &[
+            "discover",
+            "blast",
+            "demux.tsv.gz",
+            "changed.fasta",
+            "ends.tsv",
+            "-g",
+            "V",
+            "--forward",
+            "0",
+            "--reverse",
+            "0",
+            "--aligner",
+            "builtin",
+        ],
+    );
+    let result = table(dir.path().join("ends.tsv.gz"));
+    let rows = discovered(&result);
+    let prefix = format!("{}*01_S", plate.genes[gene].name);
+    for (d, donor) in plate.genotypes.iter().enumerate() {
+        let case = &plate.indices[d].2;
+        let copies: BTreeSet<&String> = donor[gene].iter().collect();
+        for copy in copies {
+            let found = rows
+                .iter()
+                .find(|(c, sequence, _, _)| c == case && sequence == copy);
+            let (_, _, name, _) = found.unwrap_or_else(|| panic!("{case}: allele not found whole"));
+            assert!(name.starts_with(&prefix), "{name}");
+        }
+    }
+}
+
+#[test]
+fn align_names_the_allele_of_every_read() {
+    let (dir, plate) = demultiplexed();
+    run(
+        dir.path(),
+        &["align", "demux.tsv.gz", "db.fasta", "hits.tsv.gz"],
+    );
+    let hits = table(dir.path().join("hits.tsv.gz"));
+    assert_eq!(hits.nrows(), plate.reads.len());
+    let cases = column(&hits, "case");
+    let alleles = column(&hits, "allele");
+    let differences = column(&hits, "differences");
+    let sequences = column(&hits, "sequence");
+    let coverage = column(&hits, "coverage");
+    assert!(coverage.iter().all(|c| c == "1.0"), "every allele is whole");
+
+    // Reads per donor and allele that match it exactly.
+    let mut exact: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+    for row in 0..hits.nrows() {
+        if differences[row] == "0" {
+            *exact
+                .entry((cases[row].as_str(), alleles[row].as_str()))
+                .or_default() += 1;
+        }
+    }
+    let mut expected: BTreeMap<(&str, String), usize> = BTreeMap::new();
+    for (d, donor) in plate.genotypes.iter().enumerate() {
+        for (g, copies) in donor.iter().enumerate() {
+            for name in copies.iter().filter_map(|c| plate.allele_name(g, c)) {
+                *expected
+                    .entry((plate.indices[d].2.as_str(), name))
+                    .or_default() += READS_PER_COPY;
+            }
+        }
+    }
+    for ((case, name), reads) in &expected {
+        // A read with a sequencing error may happen to equal the other
+        // allele of the gene; never fewer than the error-free reads.
+        let found = exact.get(&(*case, name.as_str())).copied().unwrap_or(0);
+        assert!(found >= *reads, "{case} {name}: {found} of {reads}");
+    }
+
+    // Reads of the new allele: one difference from its nearest allele,
+    // and the sequence that is reported is the new allele itself.
+    let nearest = format!("{}*01", plate.genes[NOVEL_GENE].name);
+    let carriers: BTreeSet<&str> = NOVEL_CARRIERS
+        .iter()
+        .map(|d| plate.indices[*d].2.as_str())
+        .collect();
+    let of_novel = (0..hits.nrows())
+        .filter(|&row| sequences[row] == plate.novel)
+        .inspect(|&row| {
+            assert_eq!(alleles[row], nearest);
+            assert_eq!(differences[row], "1");
+            assert!(carriers.contains(cases[row].as_str()));
+        })
+        .count();
+    assert!(of_novel >= NOVEL_CARRIERS.len() * READS_PER_COPY);
+
+    // The same matches in the layout of BLAST.
+    run(
+        dir.path(),
+        &[
+            "align",
+            "demux.tsv.gz",
+            "db.fasta",
+            "hits.blast",
+            "--format",
+            "blast",
+        ],
+    );
+    let text = std::fs::read_to_string(dir.path().join("hits.blast")).unwrap();
+    assert_eq!(text.lines().count(), plate.reads.len());
+    assert!(text.lines().all(|line| line.split('\t').count() == 12));
 }

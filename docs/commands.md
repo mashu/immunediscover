@@ -6,12 +6,13 @@ Every command follows the same pattern:
 immunediscover <group> <command> [options] <input files> <output file>
 ```
 
-`--help` after any command lists its options. Tables are tab-separated;
-`.gz` output is compressed.
+`align` stands on its own, without a group. `--help` after any command
+lists its options. Tables are tab-separated; `.gz` output is compressed.
 
 Contents: [preprocess demultiplex](#preprocess-demultiplex) ·
 [search exact](#search-exact) · [search heptamer](#search-heptamer) ·
-[search bwa](#search-bwa) · [discover blast](#discover-blast) ·
+[search bwa](#search-bwa) · [align](#align) ·
+[discover blast](#discover-blast) ·
 [discover hsmm](#discover-hsmm) ·
 [analyze haplotype](#analyze-haplotype) ·
 [analyze cooccurrence](#analyze-cooccurrence) · [table](#table) ·
@@ -187,6 +188,19 @@ immunediscover search bwa novel.tsv.gz novel_chr14.tsv genome.fasta
 
 ---
 
+## align
+
+Writes, for every read, the allele of a database it resembles most, with
+the number of differences, the position of the match in the read and the
+matching part of the read. No other software is needed. Options, columns
+and method are described in [The built-in aligner](align.md).
+
+```
+immunediscover align demux.tsv.gz IGHV.fasta hits.tsv.gz
+```
+
+---
+
 ## discover blast
 
 Finds sequences that resemble database alleles without being identical:
@@ -197,6 +211,9 @@ candidates for new alleles. Described in full in
 ```
 immunediscover discover blast demux.tsv.gz IGHV.fasta novel.tsv -g V
 ```
+
+Reads are compared with the alleles by BLAST+, or with
+`--aligner builtin` by immunediscover itself.
 
 ---
 

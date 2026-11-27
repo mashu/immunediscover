@@ -86,10 +86,12 @@ what it found and what is missing.
 
 | For | You need | One way to get it (Linux and macOS) |
 |---|---|---|
-| `discover blast` | BLAST+ 2.15 to 2.17: `blastn` and `makeblastdb` on the `PATH` | `conda install -c conda-forge -c bioconda blast=2.16` |
+| `discover blast` (unless run with `--aligner builtin`) | BLAST+ 2.15 to 2.17: `blastn` and `makeblastdb` on the `PATH` | `conda install -c conda-forge -c bioconda blast=2.16` |
 | `search bwa` | `bwa`, and a `bwa index` of the genome | `conda install -c conda-forge -c bioconda bwa` |
 
-All other commands need nothing else.
+All other commands need nothing else. `discover blast --aligner builtin`
+and `align` compare reads and alleles with the
+[aligner that is part of immunediscover](align.md).
 
 BLAST+ must be one of the versions named: `discover blast` refuses to run
 with an older or newer one, because its results depend on the version.
