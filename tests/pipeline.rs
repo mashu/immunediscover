@@ -711,3 +711,241 @@ fn align_names_the_allele_of_every_read() {
     assert_eq!(text.lines().count(), plate.reads.len());
     assert!(text.lines().all(|line| line.split('\t').count() == 12));
 }
+
+fn reverse_complement(sequence: &str) -> String {
+    sequence
+        .bytes()
+        .rev()
+        .map(|base| match base {
+            b'A' => 'T',
+            b'C' => 'G',
+            b'G' => 'C',
+            _ => 'A',
+        })
+        .collect()
+}
+
+/// `text` with `insert` written over it from `at`.
+fn written_over(text: &str, at: usize, insert: &str) -> String {
+    format!("{}{insert}{}", &text[..at], &text[at + insert.len()..])
+}
+
+/// A small genome and candidates of every kind, written to `dir`.
+///
+/// Chromosome 14 holds one gene as written and one turned around;
+/// chromosome 15 holds a distant relative of a third gene. `headers` are
+/// the header lines of chromosomes 1, 14 and 15.
+fn genome_and_candidates(dir: &Path, headers: [&str; 3]) -> [String; 3] {
+    let mut generator = Generator(0x6E0E_5EA2_C4A7_11D3);
+    let genes: [String; 3] = std::array::from_fn(|_| generator.sequence(300));
+    let mut relative = genes[2].clone();
+    for at in (7..300).step_by(15) {
+        relative = substitute(&relative, at);
+    }
+    let chromosome_1 = generator.sequence(30_000);
+    let chromosome_14 = written_over(&generator.sequence(40_000), 10_000, &genes[0]);
+    let chromosome_14 = written_over(&chromosome_14, 25_000, &reverse_complement(&genes[1]));
+    let chromosome_15 = written_over(&generator.sequence(30_000), 5_000, &relative);
+    // Lower case marks repeats in some genome files and means nothing.
+    let chromosome_14 = written_over(
+        &chromosome_14,
+        10_050,
+        &chromosome_14[10_050..10_150].to_lowercase(),
+    );
+    let mut genome = String::new();
+    for (header, bases) in headers
+        .iter()
+        .zip([&chromosome_1, &chromosome_14, &chromosome_15])
+    {
+        let _ = writeln!(genome, ">{header}");
+        for line in bases.as_bytes().chunks(60) {
+            let _ = writeln!(genome, "{}", std::str::from_utf8(line).unwrap());
+        }
+    }
+    std::fs::write(dir.join("genome.fa"), genome).unwrap();
+
+    let new_allele = substitute(&substitute(&genes[0], 120), 200);
+    let candidates = [
+        ("known", genes[0].clone()),
+        ("new", new_allele),
+        ("turned", genes[1].clone()),
+        ("elsewhere", genes[2].clone()),
+        ("nowhere", generator.sequence(300)),
+    ];
+    let mut text = String::from("allele_name\taln_qseq\n");
+    for (name, sequence) in &candidates {
+        let _ = writeln!(text, "{name}\t{sequence}");
+    }
+    std::fs::write(dir.join("candidates.tsv"), text).unwrap();
+    genes
+}
+
+/// What `search genome` must report for the genome above, whose
+/// chromosome 14 record is called `name`.
+fn check_genome_result(dir: &Path, output: &str, name: &str, genes: &[String; 3]) {
+    let kept = table(dir.join(format!("{output}.gz")));
+    assert_eq!(column(&kept, "allele_name"), ["known", "new", "turned"]);
+    assert_eq!(
+        column(&kept, "position"),
+        [
+            format!("{name}:10000"),
+            format!("{name}:10000"),
+            format!("{name}:25000")
+        ]
+    );
+    assert_eq!(column(&kept, "edit_distance"), ["0", "2", "0"]);
+    assert_eq!(column(&kept, "orientation"), ["+", "+", "-"]);
+    assert_eq!(column(&kept, "cigar"), ["300=", "120=1X79=1X99=", "300="]);
+    // The genome at the place, written like the candidate and in upper case.
+    assert_eq!(
+        column(&kept, "ref_sequence"),
+        [genes[0].clone(), genes[0].clone(), genes[1].clone()]
+    );
+
+    let discarded = table(dir.join(format!("{output}.discarded.tsv")));
+    assert_eq!(column(&discarded, "name"), ["elsewhere", "nowhere"]);
+    assert_eq!(column(&discarded, "edit_distance")[0], "20");
+    assert!(column(&discarded, "position")[0].ends_with(":5000"));
+    assert_eq!(column(&discarded, "description")[1], "no place near enough");
+}
+
+#[test]
+fn candidates_are_kept_when_they_lie_on_the_right_chromosome() {
+    let dir = tempfile::tempdir().unwrap();
+    // Names as UCSC writes them.
+    let genes = genome_and_candidates(dir.path(), ["chr1", "chr14", "chr15"]);
+    let output = run(
+        dir.path(),
+        &[
+            "search",
+            "genome",
+            "candidates.tsv",
+            "kept.tsv",
+            "genome.fa",
+        ],
+    );
+    assert!(printed(&output).contains("5 sequences processed, 3 lie on chromosome 14"));
+    assert!(printed(&output).contains("bases per second"));
+    check_genome_result(dir.path(), "kept.tsv", "chr14", &genes);
+
+    // The same genome gzipped, under the name of the command this one
+    // replaces, and asked for chromosome 15: only its candidate is kept.
+    let text = std::fs::read(dir.path().join("genome.fa")).unwrap();
+    let mut encoder = flate2::write::GzEncoder::new(
+        std::fs::File::create(dir.path().join("genome.fa.gz")).unwrap(),
+        flate2::Compression::fast(),
+    );
+    std::io::Write::write_all(&mut encoder, &text).unwrap();
+    encoder.finish().unwrap();
+    run(
+        dir.path(),
+        &[
+            "search",
+            "bwa",
+            "candidates.tsv",
+            "fifteen.tsv",
+            "genome.fa.gz",
+            "-c",
+            "chr15",
+        ],
+    );
+    let kept = table(dir.path().join("fifteen.tsv.gz"));
+    assert_eq!(column(&kept, "allele_name"), ["elsewhere"]);
+    assert_eq!(column(&kept, "edit_distance"), ["20"]);
+    // Where the other candidates lie is told in the list of the dropped.
+    let discarded = table(dir.path().join("fifteen.tsv.discarded.tsv"));
+    assert_eq!(
+        column(&discarded, "name"),
+        ["known", "new", "turned", "nowhere"]
+    );
+    assert_eq!(column(&discarded, "position")[0], "chr14:10000");
+
+    // A chromosome the genome does not have is an error, not an empty table.
+    let refused = Command::new(env!("CARGO_BIN_EXE_immunediscover"))
+        .args([
+            "search",
+            "genome",
+            "candidates.tsv",
+            "none.tsv",
+            "genome.fa",
+        ])
+        .args(["-c", "22"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert!(printed(&refused).contains("No record of the genome belongs to chromosome 22"));
+}
+
+#[test]
+fn genomes_with_descriptions_and_from_a_stream_give_the_same_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    // Headers as NCBI writes them; chromosome 1 must not pass for 14.
+    let genes = genome_and_candidates(
+        dir.path(),
+        [
+            "NC_000001.11 Homo sapiens chromosome 1, GRCh38.p14 Primary Assembly",
+            "NC_000014.9 Homo sapiens chromosome 14, GRCh38.p14 Primary Assembly",
+            "NC_000015.10 Homo sapiens chromosome 15, GRCh38.p14 Primary Assembly",
+        ],
+    );
+    run(
+        dir.path(),
+        &[
+            "search",
+            "genome",
+            "candidates.tsv",
+            "kept.tsv",
+            "genome.fa",
+            "-c",
+            "chromosome 14",
+            "--tag",
+            "Primary Assembly|alternate locus",
+        ],
+    );
+    check_genome_result(dir.path(), "kept.tsv", "NC_000014.9", &genes);
+
+    // From the standard input.
+    let genome = std::fs::File::open(dir.path().join("genome.fa")).unwrap();
+    let piped = Command::new(env!("CARGO_BIN_EXE_immunediscover"))
+        .args(["search", "genome", "candidates.tsv", "piped.tsv", "-"])
+        .current_dir(dir.path())
+        .stdin(genome)
+        .output()
+        .unwrap();
+    assert!(piped.status.success(), "{}", printed(&piped));
+    check_genome_result(dir.path(), "piped.tsv", "NC_000014.9", &genes);
+
+    // From an address, as a genome on a server is read. `curl` fetches
+    // it; a file address needs no network.
+    let has_curl = Command::new("curl")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success());
+    if !has_curl {
+        eprintln!("reading from an address skipped: curl is not on the PATH");
+        return;
+    }
+    let address = format!("file://{}", dir.path().join("genome.fa").display());
+    let output = run(
+        dir.path(),
+        &[
+            "search",
+            "genome",
+            "candidates.tsv",
+            "fetched.tsv",
+            &address,
+        ],
+    );
+    assert!(printed(&output).contains("not stored"));
+    check_genome_result(dir.path(), "fetched.tsv", "NC_000014.9", &genes);
+    // A download that fails is said to have failed.
+    let missing = format!("file://{}", dir.path().join("missing.fa").display());
+    let failed = Command::new(env!("CARGO_BIN_EXE_immunediscover"))
+        .args(["search", "genome", "candidates.tsv", "failed.tsv", &missing])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(!failed.status.success());
+    assert!(printed(&failed).contains("curl"), "{}", printed(&failed));
+}

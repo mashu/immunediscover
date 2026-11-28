@@ -11,7 +11,7 @@ lists its options. Tables are tab-separated; `.gz` output is compressed.
 
 Contents: [preprocess demultiplex](#preprocess-demultiplex) ·
 [search exact](#search-exact) · [search heptamer](#search-heptamer) ·
-[search bwa](#search-bwa) · [align](#align) ·
+[search genome](#search-genome) · [align](#align) ·
 [discover blast](#discover-blast) ·
 [discover hsmm](#discover-hsmm) ·
 [analyze haplotype](#analyze-haplotype) ·
@@ -165,17 +165,74 @@ the heptamer), `sequence` (the allele as found, up to the heptamer),
 
 ---
 
-## search bwa
+## search genome
 
-Maps candidate sequences to a genome and keeps those that land on the
-expected chromosome. A check that new alleles come from the right locus.
+Checks that candidate alleles lie on the right chromosome, and keeps
+those that do. Every candidate is looked for in the whole genome, in both
+orientations. A candidate is kept when its nearest place on the
+chromosome is at least as near as its nearest place anywhere else.
 
 ```
-immunediscover search bwa novel.tsv.gz novel_chr14.tsv genome.fasta
+immunediscover search genome novel.tsv.gz novel_chr14.tsv grch38
 ```
+
+- `novel.tsv.gz`: the candidates, for example the result of
+  `discover blast`.
+- `novel_chr14.tsv`: where to write the candidates that are kept (`.gz`
+  is added).
+- `grch38`: the genome. `grch37`, `grch38` and `t2t` are read from the
+  UCSC server while they are searched, and are not stored; a FASTA file
+  of your own works as well. See [Genome](inputs.md#genome). Several
+  genomes can be given; they are searched as one.
+
+No other program and no index is needed. The candidates stay on your
+computer: only the public genome file is fetched.
 
 | Option | Default | What it is for |
 |---|---|---|
+| `-c`, `--chromosome` | 14 | The chromosome the candidates should lie on: 14 for the heavy chain, 2 for kappa, 22 for lambda. |
+| `-n`, `--colname` | allele_name | Column with the names. |
+| `-s`, `--colseq` | aln_qseq | Column(s) with the sequence; several are joined in the order given. |
+| `-i`, `--min-identity` | 0.8 | How near a place must be to a candidate to count. 0.8 allows one difference per five bases, enough to find the nearest relative of a gene that the genome does not hold. |
+| `-t`, `--tag` | none | Count only records of the chromosome whose header matches this pattern, for example `Primary Assembly|alternate locus` to leave out the patches of an NCBI genome. |
+
+**Output**: the input rows of the candidates that are kept, with these
+columns added:
+
+| Column | Meaning |
+|---|---|
+| `position` | Where the candidate lies on the chromosome: record name, a colon, and the first base of the place (the first base of a record is 0). |
+| `edit_distance` | Differences between the candidate and the genome there: mismatches, bases only in the candidate, bases only in the genome. 0 means the genome holds the candidate unchanged. |
+| `ref_sequence` | The bases of the genome at that place, written in the orientation of the candidate. |
+| `orientation` | `+` if the candidate lies on the record as written, `-` if its reverse complement does. |
+| `cigar` | The alignment along the genome: `=` equal, `X` different, `I` base only in the candidate, `D` base only in the genome. |
+| `elsewhere` | The nearest place outside the chromosome, written like `position`. Empty if there is none within `--min-identity`. |
+| `elsewhere_distance` | Its differences. The larger it is compared with `edit_distance`, the clearer the candidate belongs to the chromosome. Equal numbers mean that the genome holds the sequence in both places; the log warns about such candidates. |
+
+The candidates that are not kept are listed in a second file,
+`novel_chr14.tsv.discarded.tsv`: their `name`, the record of the nearest
+place (`description`, `genome`, `position`, `edit_distance`), and their
+nearest place on the wanted chromosome if they have one
+(`chromosome_position`, `chromosome_distance`).
+
+**Good to know**
+
+- Searching runs at about 60 million bases per second on two processor
+  cores, which makes about a minute for a human genome. Read from the
+  internet, it takes as long as the download of 900 MB on your
+  connection.
+- Sequences shorter than 30 bases are only found where the genome holds
+  them unchanged, and a sequence as short as a D gene occurs in many
+  places by chance. Look for short genes together with the bases around
+  them: `-s qseq` takes the column of `discover blast` that holds the
+  gene with its surroundings.
+- A gene that the genome does not hold is matched to its nearest relative.
+  If that relative is on the same chromosome, as for most immunoglobulin
+  genes, the candidate is kept, with a larger `edit_distance`.
+- `search bwa` is the former name of this command and still works. It no
+  longer needs `bwa` or an index.
+
+---|---|---|
 | `-c`, `--chromosome` | chromosome 14 | Text that the description of the genome record must contain. Use "chromosome 2" for kappa, "chromosome 22" for lambda. |
 | `-n`, `--colname` | allele_name | Column with the names. |
 | `-s`, `--colseq` | aln_qseq | Column(s) with the sequence; several are joined. |

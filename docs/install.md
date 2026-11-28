@@ -87,7 +87,7 @@ what it found and what is missing.
 | For | You need | One way to get it (Linux and macOS) |
 |---|---|---|
 | `discover blast` (unless run with `--aligner builtin`) | BLAST+ 2.15 to 2.17: `blastn` and `makeblastdb` on the `PATH` | `conda install -c conda-forge -c bioconda blast=2.16` |
-| `search bwa` | `bwa`, and a `bwa index` of the genome | `conda install -c conda-forge -c bioconda bwa` |
+| `search genome` with a genome named `grch37`, `grch38` or `t2t`, or an address | `curl`, to read the genome from the internet | part of macOS and of nearly every Linux |
 
 All other commands need nothing else. `discover blast --aligner builtin`
 and `align` compare reads and alleles with the

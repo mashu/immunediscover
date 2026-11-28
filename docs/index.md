@@ -34,7 +34,7 @@ FASTQ of a plate ──demultiplex──▶ reads per donor ──┬─ search 
 | `discover hsmm` | Finds D genes by their recombination signals alone. |
 | `align` | Reports the most similar allele of every read, with its differences. |
 | `search heptamer` | Finds where each V allele ends from the heptamer that follows it. |
-| `search bwa` | Checks that candidates map to the expected chromosome of the genome. |
+| `search genome` | Checks that candidates lie on the expected chromosome of the genome. |
 | `analyze haplotype` | Calls each donor homozygous or heterozygous for each gene. |
 | `analyze cooccurrence` | Finds alleles that tend to occur in the same donors. |
 | `table ...` | Joins, filters, sorts and exports tables. |

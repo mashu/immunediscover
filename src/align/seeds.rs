@@ -46,9 +46,11 @@ pub fn words(sequence: &[u8]) -> impl Iterator<Item = (usize, u32)> + '_ {
 
 /// One place where a word occurs in the database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Place {
-    subject: u32,
-    position: u32,
+pub(super) struct Place {
+    /// Number of the group.
+    pub(super) subject: u32,
+    /// Start of the word in the sequences of the group.
+    pub(super) position: u32,
 }
 
 /// Every word of a set of sequences with the places where it occurs.
@@ -125,7 +127,7 @@ impl WordIndex {
     }
 
     #[inline]
-    fn places(&self, word: u32) -> &[Place] {
+    pub(super) fn places(&self, word: u32) -> &[Place] {
         let word = word as usize;
         &self.places[self.starts[word] as usize..self.starts[word + 1] as usize]
     }

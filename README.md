@@ -22,4 +22,4 @@ immunediscover discover blast demux.tsv.gz IGHV.fasta novel.tsv -g V
 ```
 
 `discover blast` needs BLAST+ (`blastn`, `makeblastdb`) on the `PATH`, or
-`--aligner builtin`; `search bwa` needs `bwa`.
+`--aligner builtin`. Nothing else is needed.

@@ -5,7 +5,6 @@
 - The program: `immunediscover` (see [Installing](install.md)).
 - For `discover blast`: NCBI BLAST+ (`blastn` and `makeblastdb` on your
   `PATH`), unless you run it with `--aligner builtin`.
-- For `search bwa`: `bwa`.
 - Your data: a FASTQ file per plate, an index sheet, and a FASTA database
   of known alleles for each gene type. See [inputs](inputs.md).
 

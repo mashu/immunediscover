@@ -227,7 +227,7 @@ else
     say "Run: $name --help"
 fi
 
-# Two commands need other programs. Say now whether they are there, on
+# One command can use another program. Say now whether it is there, on
 # Linux and macOS alike, instead of leaving it to the first failed run.
 CONDA_HINT="conda install -c conda-forge -c bioconda"
 say ""
@@ -249,10 +249,9 @@ else
     say "      To get it: $CONDA_HINT blast=2.16"
     say "      Or run it without BLAST: discover blast --aligner builtin"
 fi
-if have bwa; then
-    say "  bwa found: 'search bwa' is ready."
+if have curl; then
+    say "  curl found: 'search genome' can read a genome from the internet (grch37, grch38, t2t)."
 else
-    say "  bwa not found. Only 'search bwa' needs it."
-    say "      To get it: $CONDA_HINT bwa"
+    say "  curl not found. 'search genome' then needs the genome as a file."
 fi
 say "  All other commands need nothing else."
