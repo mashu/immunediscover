@@ -18,7 +18,8 @@ immunediscover is a Rust port of
   behave identically in `search exact` and `discover blast`; added
   `--extension-maxdist`.
 - **0.4.0** (this version): alleles without reads take the context of their
-  gene; `search bwa` ignores letter case; `--refgene` ratios are empty
+  gene; `search bwa` (now `search genome`) ignores letter case;
+  `--refgene` ratios are empty
   where the reference is absent.
 
 The evidence columns of `discover blast` are an addition to upstream;
@@ -38,7 +39,7 @@ corresponding command runs:
 | Command | Needs |
 |---|---|
 | `discover blast` | `blastn`, `makeblastdb` (BLAST+ 2.15–2.17) |
-| `search bwa` | `bwa` (0.7.x) and a `bwa index` of the genome |
+| `search genome` with a named genome or an address | `curl` |
 | `ki-check` | same as `discover blast` |
 
 ## KI allele recovery self-check
@@ -123,7 +124,7 @@ src/
   commands/   one module per sub-command, each exposing `Params` + `run`
     preprocess/  demultiplex, pattern (barcode matching), simulate
     search/      exact/{scan, flanks, border, summarize, frequencies, refgene}
-                 heptamer, bwa/{aligner, cigar}
+                 heptamer, genome/{source, chromosome}
     discover/    blast/{runner, workdir, locate, affixes, trim, assign}
                  hsmm/{model, scan}, profile
     align.rs     the `align` command: reads against a database with the
@@ -301,6 +302,29 @@ programme_finds`; `IMMUNEDISCOVER_STRESS=50000` runs it longer).
 would give (`assign::builtin_best_hits`), so that everything after the
 assignment is the same code for both aligners. `ki-check
 --builtin-aligner` runs the self-check with it.
+
+## Genome search
+
+`search genome` replaces the former `search bwa`. `align/genome.rs` turns
+the read search around: the candidates are indexed in both orientations
+(the same 10-mer index over groups), and the genome is read one record at
+a time (`io::fasta::FastaStream`) and cut into overlapping pieces that are
+searched in parallel. A place is counted (`edits::differences`) where a
+piece shares enough words with a group on neighbouring diagonals; only
+words that do not overlap count, because a dozen equal bases in a row is
+chance in three billion. Per candidate the nearest place on the wanted
+chromosome and the nearest elsewhere are kept and aligned at the end.
+Candidates shorter than 30 bases are looked for unchanged
+(Aho-Corasick).
+
+`commands/search/genome/source.rs` opens a file, the standard input, or
+an address through `curl`; `chromosome.rs` reads the chromosome from
+UCSC, NCBI and Ensembl headers. On a synthetic genome of 220 million
+bases with the human IGHV genes on chromosome 14 and diverged copies
+elsewhere, 130 candidates took 2.8 s on two cores (3.8 s gzipped). `bwa`
+needed 3.5 minutes to index the same genome and gave the same verdict
+and position for every candidate it could map; it could not map a
+17-base D gene.
 
 ## Speed
 

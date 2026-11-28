@@ -215,8 +215,8 @@ exporting, sort the table by `allele_name` and look at `copies`,
 `evidence`, `db_distance`, `donors` and `segregates` for each candidate.
 
 A check against the genome is available with
-[`search bwa`](commands.md#search-bwa): it keeps the candidates that map
-to the expected chromosome.
+[`search genome`](commands.md#search-genome): it keeps the candidates
+that lie on the expected chromosome.
 
 ## Troubleshooting
 

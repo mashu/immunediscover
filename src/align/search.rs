@@ -36,11 +36,11 @@ use crate::seq::search::PatternSet;
 
 /// Subjects shorter than this are aligned to every read in whole: they
 /// hold too few words to be found by them.
-const SHORT_SUBJECT: usize = 3 * WORD;
+pub(super) const SHORT_SUBJECT: usize = 3 * WORD;
 /// Half width of the band an alignment starts with, and the widest tried.
 /// The diagonal found from shared words is off by less than this.
-const HALF_WIDTH: usize = 12;
-const MAX_HALF_WIDTH: usize = 96;
+pub(super) const HALF_WIDTH: usize = 12;
+pub(super) const MAX_HALF_WIDTH: usize = 96;
 /// Fewer shared words than this are chance.
 const MIN_VOTES: u32 = 2;
 /// Most words of a read that are looked up between two that are skipped.
@@ -51,7 +51,7 @@ const WORDS_PER_SUBJECT: usize = 40;
 const GROUP_RADIUS: usize = 8;
 /// More differences than this are not counted: a read this far from a
 /// subject does not match it.
-const MAX_COUNTED: usize = 128;
+pub(super) const MAX_COUNTED: usize = 128;
 
 /// What counts as a match.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -237,7 +237,7 @@ fn gapless(subject: &[u8], read: &[u8], start: usize, scoring: &Scoring) -> Path
 
 /// Align `subject` to `read` on the diagonals `band`, and beyond them
 /// for as long as the alignment runs along their border.
-fn align_in(
+pub(super) fn align_in(
     band: (isize, isize),
     subject: &[u8],
     read: &[u8],
@@ -332,10 +332,10 @@ struct Limits {
 /// Subjects of one length that differ from the first of them in few
 /// positions.
 #[derive(Debug)]
-struct Group {
+pub(super) struct Group {
     /// Numbers of the subjects, in the order of the database.
-    members: Vec<usize>,
-    length: usize,
+    pub(super) members: Vec<usize>,
+    pub(super) length: usize,
     /// Most mismatches between a member and the first member.
     radius: usize,
 }
@@ -344,9 +344,9 @@ struct Group {
 #[derive(Debug)]
 pub struct Database {
     subjects: Vec<Subject>,
-    groups: Vec<Group>,
+    pub(super) groups: Vec<Group>,
     /// Words of the groups.
-    index: WordIndex,
+    pub(super) index: WordIndex,
     /// Subjects aligned to every read in whole.
     short: Vec<usize>,
     /// Every `step`-th word of a read is looked up.

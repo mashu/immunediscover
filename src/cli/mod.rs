@@ -46,7 +46,7 @@ enum Command {
     /// De novo allele discovery (blast, hsmm)
     #[command(subcommand)]
     Discover(discover::DiscoverCommand),
-    /// Search against known references (exact, heptamer, bwa)
+    /// Search against known references (exact, heptamer, genome)
     #[command(subcommand)]
     Search(search::SearchCommand),
     /// Find the best matching allele of every read, without BLAST
@@ -121,10 +121,12 @@ mod tests {
             &[
                 "search", "heptamer", "i.tsv.gz", "d.fa", "o.tsv.gz", "s.tsv",
             ],
-            &["search", "bwa", "i.tsv", "o.tsv", "g.fa"],
+            &["search", "genome", "i.tsv", "o.tsv", "grch38"],
             &[
-                "search", "bwa", "i.tsv", "o.tsv", "g1.fa", "g2.fa", "-s", "seq",
+                "search", "genome", "i.tsv", "o.tsv", "g1.fa", "g2.fa", "-s", "seq", "-c", "2",
             ],
+            // The name of the command this one replaces still works.
+            &["search", "bwa", "i.tsv", "o.tsv", "g.fa"],
             &["analyze", "cooccurrence", "i.tsv"],
             &["analyze", "haplotype", "i.tsv", "o.tsv"],
             &["preprocess", "demultiplex", "i.fq", "idx.tsv", "o.tsv"],

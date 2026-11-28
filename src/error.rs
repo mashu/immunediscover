@@ -63,7 +63,7 @@ impl Error {
         }
     }
 
-    /// Failure of an external program (blastn, makeblastdb, bwa).
+    /// Failure of an external program (blastn, makeblastdb, curl).
     pub fn tool(tool: &'static str, message: impl Into<String>) -> Self {
         Error::ExternalTool {
             tool,

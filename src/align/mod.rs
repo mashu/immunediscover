@@ -3,6 +3,7 @@
 pub mod banded;
 pub mod distance;
 pub mod edits;
+pub mod genome;
 pub mod gotoh;
 pub mod needleman_wunsch;
 pub mod search;

@@ -105,13 +105,31 @@ The accepted heptamer sequences per chain:
  "IGLV": ["CACAGTG", "CACGGTG"]}
 ```
 
-## Genome: FASTA with a BWA index
+## Genome
 
-Used by: `search bwa`.
+Used by: `search genome`.
 
-One or more genome FASTA files, each indexed with `bwa index`. The record
-descriptions must name the chromosome (for example "chromosome 14"),
-because candidates are kept by the chromosome they map to.
+A genome can be given in four ways:
+
+| What you write | What is read |
+|---|---|
+| `grch37`, `grch38` or `t2t` | The human genome of that assembly, from the UCSC server. It is searched while it arrives and is not stored. `hg19`, `hg38`, `hs1` and `chm13` are accepted too. |
+| a file name | A FASTA file, plain or gzipped. No index is needed. |
+| an address (`https://...`) | A FASTA file on a server, plain or gzipped. |
+| `-` | FASTA text from the standard input. |
+
+The program has to tell from the header of each record which chromosome
+it belongs to. It understands the three usual ways of writing them:
+
+| Source | Header | Chromosome |
+|---|---|---|
+| UCSC | `>chr14`, `>chr14_KI270846v1_alt` | 14 |
+| NCBI | `>NC_000014.9 Homo sapiens chromosome 14, GRCh38.p14 Primary Assembly` | 14 |
+| Ensembl | `>14 dna:chromosome chromosome:GRCh38:14:...` | 14 |
+
+Alternate loci and unlocalised pieces of a chromosome count as that
+chromosome. Records that belong to no chromosome (unplaced pieces) count
+as elsewhere.
 
 ## Tables for `analyze`
 

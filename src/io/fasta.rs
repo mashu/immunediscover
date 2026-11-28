@@ -72,6 +72,71 @@ pub fn read_fasta(path: &Path) -> Result<Vec<FastaRecord>> {
     Ok(records)
 }
 
+/// Reads the records of a FASTA text one at a time, for inputs too large
+/// to hold as a whole (a genome), from a file or from a stream.
+pub struct FastaStream<R: BufRead> {
+    reader: R,
+    /// Where the text comes from, for error messages.
+    origin: String,
+    /// Header of the record that follows, read with the record before.
+    next_header: Option<String>,
+    line: Vec<u8>,
+    started: bool,
+}
+
+impl<R: BufRead> FastaStream<R> {
+    pub fn new(reader: R, origin: impl Into<String>) -> Self {
+        FastaStream {
+            reader,
+            origin: origin.into(),
+            next_header: None,
+            line: Vec::new(),
+            started: false,
+        }
+    }
+
+    /// Read the next record: its header (without `>`) is returned and its
+    /// sequence replaces the content of `sequence`, in upper case and
+    /// without line breaks. `None` at the end of the text.
+    pub fn next_record(&mut self, sequence: &mut Vec<u8>) -> Result<Option<String>> {
+        sequence.clear();
+        let mut header = self.next_header.take();
+        loop {
+            self.line.clear();
+            let read = self
+                .reader
+                .read_until(b'\n', &mut self.line)
+                .map_err(|e| Error::io(&self.origin, e))?;
+            if read == 0 {
+                self.started = true;
+                return Ok(header);
+            }
+            let line = self.line.trim_ascii_end();
+            if let Some(text) = line.strip_prefix(b">") {
+                let text = String::from_utf8_lossy(text).into_owned();
+                if header.is_some() {
+                    self.next_header = Some(text);
+                    return Ok(header);
+                }
+                header = Some(text);
+                self.started = true;
+            } else if !line.is_empty() {
+                if header.is_none() {
+                    let what = if self.started {
+                        "sequence data before a '>' header"
+                    } else {
+                        "not a FASTA text: it does not start with '>'"
+                    };
+                    return Err(Error::parse(&self.origin, what));
+                }
+                let from = sequence.len();
+                sequence.extend_from_slice(line);
+                sequence[from..].make_ascii_uppercase();
+            }
+        }
+    }
+}
+
 /// Streaming FASTA writer.
 pub struct FastaWriter<W: Write> {
     out: W,
@@ -120,6 +185,31 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stream_gives_one_record_at_a_time_in_upper_case() {
+        let text = b">chr1 first\nacgtNN\nACgt\r\n\n>chr2\n>chr3\nTT\n";
+        let mut stream = FastaStream::new(&text[..], "test");
+        let mut sequence = Vec::new();
+        let mut records = Vec::new();
+        while let Some(header) = stream.next_record(&mut sequence).unwrap() {
+            records.push((header, String::from_utf8(sequence.clone()).unwrap()));
+        }
+        let expected = [("chr1 first", "ACGTNNACGT"), ("chr2", ""), ("chr3", "TT")];
+        let found: Vec<(&str, &str)> = records
+            .iter()
+            .map(|(header, sequence)| (header.as_str(), sequence.as_str()))
+            .collect();
+        assert_eq!(found, expected);
+        // The end stays the end.
+        assert!(stream.next_record(&mut sequence).unwrap().is_none());
+
+        let mut empty = FastaStream::new(&b""[..], "test");
+        assert!(empty.next_record(&mut sequence).unwrap().is_none());
+        let mut other = FastaStream::new(&b"<html>not found</html>\n"[..], "test");
+        let error = other.next_record(&mut sequence).unwrap_err().to_string();
+        assert!(error.contains("not a FASTA text"), "{error}");
+    }
 
     #[test]
     fn headers_keep_trailing_blanks_like_fastx() {

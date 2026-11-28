@@ -69,7 +69,8 @@ pub fn spoken_duration(seconds: f64) -> String {
 /// writes the total time and the average speed.
 ///
 /// [`Progress::add`] may be called from many threads; it costs one atomic
-/// addition unless a line is due.
+/// addition unless a line is due. When the amount of work is not known
+/// beforehand (`total` 0), the line shows what is done and the speed.
 pub struct Progress {
     doing: &'static str,
     done_as: &'static str,
@@ -139,6 +140,21 @@ impl Progress {
     }
 
     fn line(&self, done: usize, seconds: f64) -> String {
+        if self.total == 0 {
+            let rate = if seconds > 0.0 {
+                done as f64 / seconds
+            } else {
+                0.0
+            };
+            return format!(
+                "{}: {} {}, {} {} per second",
+                self.doing,
+                with_thousands(done),
+                self.unit,
+                with_thousands(rate.round() as usize),
+                self.unit
+            );
+        }
         let done = done.min(self.total);
         let share = if self.total == 0 {
             1.0
@@ -245,6 +261,12 @@ mod tests {
         assert_eq!(
             progress.line(50_000, 10.0),
             "Aligning [######------------------]  25%  50,000 of 200,000 reads, 5,000 reads per second, about 30.0 s left"
+        );
+        // Without a known amount of work: what is done, and the speed.
+        let open = Progress::new("Searching", "Searched", "bases", 0);
+        assert_eq!(
+            open.line(3_000_000, 2.0),
+            "Searching: 3,000,000 bases, 1,500,000 bases per second"
         );
         // Nothing done yet: no speed to tell the time left from.
         assert!(!progress.line(0, 0.0).contains("left"));

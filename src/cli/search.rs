@@ -7,10 +7,10 @@ use clap::{Args, Subcommand};
 use super::validators::{
     at_least_one, non_negative, positive_size, positive_unit_interval, unit_interval,
 };
-use crate::commands::search::bwa::{self, BwaParams};
 use crate::commands::search::exact::{
     self, ExactParams, ExactSearchSettings, FlankMode, RssElement,
 };
+use crate::commands::search::genome::{self, GenomeParams};
 use crate::commands::search::heptamer::{self, HeptamerParams, DEFAULT_HEPTAMER_FILE};
 use crate::error::Result;
 use crate::seq::GeneType;
@@ -21,8 +21,10 @@ pub enum SearchCommand {
     Exact(Box<ExactArgs>),
     /// Identify heptamer RSS positions and extend/trim V reads accordingly
     Heptamer(HeptamerArgs),
-    /// Genome mapping QC with BWA to retain sequences mapped to the target chromosome
-    Bwa(BwaArgs),
+    /// Check that candidate alleles lie on the right chromosome of a
+    /// genome; keeps those that do. Needs no other program
+    #[command(alias = "bwa")]
+    Genome(GenomeArgs),
 }
 
 impl SearchCommand {
@@ -30,7 +32,7 @@ impl SearchCommand {
         match self {
             SearchCommand::Exact(args) => args.run(),
             SearchCommand::Heptamer(args) => args.run(),
-            SearchCommand::Bwa(args) => args.run(),
+            SearchCommand::Genome(args) => args.run(),
         }
     }
 }
@@ -211,36 +213,47 @@ impl HeptamerArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct BwaArgs {
-    /// TSV file with candidate alleles (e.g. `discover blast` output)
+pub struct GenomeArgs {
+    /// Table with the candidate alleles (for example the result of
+    /// `discover blast`)
     tsv: PathBuf,
-    /// TSV file to save filtered input (gzip-compressed, `.gz` is appended)
+    /// Where to write the candidates that lie on the chromosome (gzipped,
+    /// `.gz` is added). Those that do not are listed in a file with
+    /// `.discarded.tsv` added to this name
     output: PathBuf,
-    /// FASTA file(s) with a BWA index; alignments to all of them are pooled
+    /// The genome(s) to look in: grch37, grch38 or t2t to read the human
+    /// genome from the UCSC server without storing it, or a FASTA file
+    /// (may be gzipped), an address, or - for the standard input. Several
+    /// genomes are searched as one
     #[arg(required = true, num_args = 1..)]
-    genome: Vec<PathBuf>,
-    /// Text that the description of a genome record must contain for hits
-    /// on it to be kept
-    #[arg(short = 'c', long = "chromosome", default_value = "chromosome 14")]
+    genome: Vec<String>,
+    /// The chromosome the candidates should lie on: 14 for the heavy
+    /// chain, 2 for kappa, 22 for lambda
+    #[arg(short = 'c', long = "chromosome", default_value = "14")]
     chromosome: String,
-    /// Name of the column with allele names
+    /// Column with the names of the candidates
     #[arg(short = 'n', long = "colname", default_value = "allele_name")]
     colname: String,
-    /// Columns concatenated into the sequence to align
+    /// Column(s) with the sequence to look for; several are joined in
+    /// the order given. For short genes use qseq, the gene with the bases
+    /// around it: a D gene alone occurs in many places by chance
     #[arg(short = 's', long = "colseq", num_args = 0.., default_values = ["aln_qseq"])]
     colseq: Vec<String>,
-    /// Regex to filter valid descriptions of chromosomes
-    #[arg(
-        short = 't',
-        long = "tag",
-        default_value = "(.*Primary Assembly.*)|(.*alternate locus.*)"
-    )]
-    tag: String,
+    /// How near a place in the genome must be to a candidate to count
+    /// (0-1). 0.8 allows one difference per five bases, enough to find
+    /// the nearest relative of a gene the genome does not hold
+    #[arg(short = 'i', long = "min-identity", default_value_t = 0.8, value_parser = unit_interval)]
+    min_identity: f64,
+    /// Count only records of the chromosome whose header matches this
+    /// pattern, for example "Primary Assembly|alternate locus" to leave
+    /// out patches of an NCBI genome
+    #[arg(short = 't', long = "tag")]
+    tag: Option<String>,
 }
 
-impl BwaArgs {
+impl GenomeArgs {
     fn run(self) -> Result<()> {
-        bwa::run(&BwaParams {
+        genome::run(&GenomeParams {
             tsv: self.tsv,
             output: self.output,
             genomes: self.genome,
@@ -248,6 +261,7 @@ impl BwaArgs {
             name_column: self.colname,
             sequence_columns: self.colseq,
             tag: self.tag,
+            min_identity: self.min_identity,
         })
     }
 }
